@@ -60,3 +60,34 @@ def test_calibration_bins_groups_by_predicted_probability():
     bin_counts = {round(b[0], 1): b[3] for b in bins}
     assert bin_counts[0.0] == 2
     assert bin_counts[0.4] == 2
+
+
+def test_no_skill_brier_score_matches_base_rate_formula():
+    result = BacktestResult(
+        predicted_probs=[0.1, 0.9, 0.1, 0.9],
+        actual_outcomes=[False, True, True, False],
+    )
+    # base rate = 2/4 = 0.5 -> no-skill brier = 0.5 * 0.5 = 0.25
+    assert abs(result.no_skill_brier_score - 0.25) < 1e-9
+
+
+def test_no_skill_brier_score_handles_empty_data():
+    result = BacktestResult(predicted_probs=[], actual_outcomes=[])
+    assert math.isnan(result.no_skill_brier_score)
+
+
+def test_brier_skill_score_is_one_for_perfect_predictions():
+    result = BacktestResult(
+        predicted_probs=[0.0, 1.0, 0.0, 1.0],
+        actual_outcomes=[False, True, False, True],
+    )
+    assert abs(result.brier_skill_score - 1.0) < 1e-9
+
+
+def test_brier_skill_score_is_zero_when_model_matches_naive_baseline():
+    # always predicting exactly the base rate (0.5) makes model_brier == no_skill_brier
+    result = BacktestResult(
+        predicted_probs=[0.5, 0.5, 0.5, 0.5],
+        actual_outcomes=[False, True, True, False],
+    )
+    assert abs(result.brier_skill_score - 0.0) < 1e-9

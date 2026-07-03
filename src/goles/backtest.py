@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass
 
@@ -25,6 +26,29 @@ class BacktestResult:
         return sum(
             (p - float(o)) ** 2 for p, o in zip(self.predicted_probs, self.actual_outcomes)
         ) / n
+
+    @property
+    def no_skill_brier_score(self) -> float:
+        """Brier score of the naive baseline that always predicts the
+        empirical base rate (mean of actual_outcomes) instead of using any
+        live signal. This is the reference score a model must beat to have
+        any real skill."""
+        n = len(self.actual_outcomes)
+        if n == 0:
+            return float("nan")
+        base_rate = sum(float(o) for o in self.actual_outcomes) / n
+        return base_rate * (1.0 - base_rate)
+
+    @property
+    def brier_skill_score(self) -> float:
+        """Brier Skill Score: 1 - (model_brier / no_skill_brier). Positive
+        means the model beats the naive base-rate baseline; zero means it's
+        exactly as good; negative means it's worse than just guessing the
+        base rate for every prediction."""
+        ref = self.no_skill_brier_score
+        if ref == 0.0 or math.isnan(ref):
+            return float("nan")
+        return 1.0 - (self.brier_score / ref)
 
     def calibration_bins(self, n_bins: int = 5) -> list[tuple[float, float, float, int]]:
         """Groups predictions into `n_bins` equal-width probability buckets
@@ -105,6 +129,8 @@ def run_backtest(
 def print_report(result: BacktestResult, n_bins: int = 5) -> None:
     print(f"Muestras evaluadas: {len(result.predicted_probs)}")
     print(f"Brier score: {result.brier_score:.4f}")
+    print(f"Brier score (base ingenua): {result.no_skill_brier_score:.4f}")
+    print(f"Brier Skill Score: {result.brier_skill_score:.4f}  (>0 = mejor que la base ingenua)")
     print("Calibracion (bin_low, prob. media predicha, frecuencia real, n):")
     bin_width = 1 / n_bins
     for bin_low, mean_pred, mean_actual, count in result.calibration_bins(n_bins):
