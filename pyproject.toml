@@ -8,6 +8,8 @@ dependencies = [
     "requests>=2.31",
     "soccerdata>=1.9",
     "scipy>=1.13",
+    "lightgbm>=4.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
