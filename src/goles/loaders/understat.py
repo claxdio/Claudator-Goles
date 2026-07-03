@@ -10,9 +10,13 @@ from goles.db import get_or_create_team
 
 def fetch_understat_shots(leagues: list[str], seasons: list[str]) -> pd.DataFrame:
     """Fetch shot-level events for the given leagues/seasons from Understat
-    via the `soccerdata` wrapper. Returns whatever DataFrame the reader
-    produces (at least: game_id, minute, team, home_team, away_team, xG,
-    result)."""
+    via the `soccerdata` wrapper. Returns the raw DataFrame produced by
+    `soccerdata`'s Understat reader: `league`, `season`, `game`, `team`, and
+    `player` are MultiIndex levels (not columns), there is no direct
+    home_team/away_team column, and shot quality is exposed as a lowercase
+    `xg` column (plus `game_id`, `minute`, `result`, etc.). See
+    `shots_to_records`'s docstring for how this shape gets normalized into
+    plain records."""
     reader = sd.Understat(leagues=leagues, seasons=seasons)
     return reader.read_shot_events()
 
@@ -20,7 +24,7 @@ def fetch_understat_shots(leagues: list[str], seasons: list[str]) -> pd.DataFram
 def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
     """Normalize an Understat shot-events DataFrame (as returned by
     `fetch_understat_shots`) into plain dict records with keys: match_id,
-    league, season, home_team, away_team, minute, team ("home"/"away"),
+    league, season, home_team, away_team, date, minute, team ("home"/"away"),
     xg, is_goal.
 
     The real soccerdata Understat reader returns `league`, `season`, `game`,
@@ -31,6 +35,16 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
     which has the form "{date} {home_team}-{away_team}" — matched exactly
     against the two known team names (not a naive split on "-") so that
     hyphenated team names (e.g. "Stoke-on-Trent") don't break disambiguation.
+    The date portion (before the first space) is captured verbatim as the
+    "date" field.
+
+    Own goals: Understat records an own goal as a shot row with
+    `result == "Own Goal"` attributed to the *shooting* player's own team
+    (e.g. a Manchester United defender's own goal is attributed to
+    team="Manchester United"), but the goal actually counts for the
+    *opposing* side. For these rows, `is_goal` is set True, `xg` is forced
+    to 0.0 (an own goal isn't a shot-quality event for the scoring side),
+    and `team` is flipped to the side opposite the shooting team's side.
     """
     df = shots_df.reset_index()
 
@@ -43,7 +57,7 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
             )
         team_a, team_b = teams_in_game
         game_str = game_shots["game"].iloc[0]
-        teams_part = game_str.split(" ", 1)[1]
+        date_part, teams_part = game_str.split(" ", 1)
         if teams_part == f"{team_a}-{team_b}":
             home_team, away_team = team_a, team_b
         elif teams_part == f"{team_b}-{team_a}":
@@ -59,6 +73,18 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
         for row in game_shots.itertuples(index=False):
             row_dict = row._asdict()
             team_side = "home" if row_dict["team"] == home_team else "away"
+            is_own_goal = row_dict["result"] == "Own Goal"
+            if is_own_goal:
+                # The shot is attributed to the shooter's own team, but the
+                # goal counts for the opposing side, so flip it here. xg is
+                # forced to 0.0 since an own goal isn't a shot-quality event
+                # for the scoring side.
+                team_side = "away" if team_side == "home" else "home"
+                xg = 0.0
+                is_goal = True
+            else:
+                xg = float(row_dict["xg"])
+                is_goal = row_dict["result"] == "Goal"
             records.append(
                 {
                     "match_id": row_dict["game_id"],
@@ -66,10 +92,11 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
                     "season": season,
                     "home_team": home_team,
                     "away_team": away_team,
+                    "date": date_part,
                     "minute": int(row_dict["minute"]),
                     "team": team_side,
-                    "xg": float(row_dict["xg"]),
-                    "is_goal": row_dict["result"] == "Goal",
+                    "xg": xg,
+                    "is_goal": is_goal,
                 }
             )
     return records
@@ -79,29 +106,62 @@ def persist_shots(conn: sqlite3.Connection, records: list[dict]) -> None:
     """Insert normalized shot records into the database, creating the
     parent match row (and teams) on first sight of a given `match_id`, and
     incrementing the match's goal tally for every shot with is_goal=True.
-    Safe to call repeatedly with overlapping records for the same match_id
-    (existing matches are reused, not duplicated), but re-persisting the
-    same shot rows will duplicate rows in `shots` — callers should persist
-    each match's shots exactly once."""
-    for rec in records:
-        home_id = get_or_create_team(conn, rec["home_team"])
-        away_id = get_or_create_team(conn, rec["away_team"])
 
-        row = conn.execute(
-            "SELECT match_id FROM matches WHERE understat_id = ?", (rec["match_id"],)
-        ).fetchone()
-        if row is None:
+    Safe to call repeatedly across separate calls for the same match_id:
+    if a match already exists in `matches` when its first record in this
+    call is processed, all shots for that match_id are skipped entirely
+    (no new `shots` rows, no goal-tally updates) rather than re-persisted.
+    This relies on shots for a given match_id always arriving together in
+    a single `records` list from the loader (one match is never split
+    across multiple `persist_shots` calls), so "match already exists"
+    reliably means "already fully persisted" and partial persistence
+    isn't a real scenario here."""
+    # Maps understat match_id -> internal match_id for matches created
+    # earlier in *this* call, or -> _SKIP for matches found to already exist
+    # in the database before this call started (meaning all their shots
+    # were already fully persisted in a previous call).
+    _SKIP = object()
+    known_matches: dict[int, object] = {}
+
+    for rec in records:
+        match_id_key = rec["match_id"]
+        cached = known_matches.get(match_id_key)
+        if cached is _SKIP:
+            continue
+
+        if cached is not None:
+            match_id = cached
+        else:
+            row = conn.execute(
+                "SELECT match_id FROM matches WHERE understat_id = ?", (match_id_key,)
+            ).fetchone()
+            if row is not None:
+                known_matches[match_id_key] = _SKIP
+                continue
+
+            home_id = get_or_create_team(conn, rec["home_team"])
+            away_id = get_or_create_team(conn, rec["away_team"])
             conn.execute(
                 """INSERT INTO matches
                    (understat_id, league, season, date, home_team_id, away_team_id)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (rec["match_id"], rec["league"], rec["season"], "", home_id, away_id),
+                (
+                    match_id_key,
+                    rec["league"],
+                    rec["season"],
+                    rec.get("date", ""),
+                    home_id,
+                    away_id,
+                ),
             )
             row = conn.execute(
-                "SELECT match_id FROM matches WHERE understat_id = ?", (rec["match_id"],)
+                "SELECT match_id FROM matches WHERE understat_id = ?", (match_id_key,)
             ).fetchone()
-        match_id = row[0]
+            match_id = row[0]
+            known_matches[match_id_key] = match_id
 
+        home_id = get_or_create_team(conn, rec["home_team"])
+        away_id = get_or_create_team(conn, rec["away_team"])
         team_id = home_id if rec["team"] == "home" else away_id
         conn.execute(
             "INSERT INTO shots (match_id, minute, team_id, xg, is_goal) VALUES (?, ?, ?, ?, ?)",

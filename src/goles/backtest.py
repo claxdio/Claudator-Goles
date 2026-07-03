@@ -102,9 +102,10 @@ def run_backtest(
     return BacktestResult(predicted_probs=predicted_probs, actual_outcomes=actual_outcomes)
 
 
-def print_report(result: BacktestResult) -> None:
+def print_report(result: BacktestResult, n_bins: int = 5) -> None:
     print(f"Muestras evaluadas: {len(result.predicted_probs)}")
     print(f"Brier score: {result.brier_score:.4f}")
     print("Calibracion (bin_low, prob. media predicha, frecuencia real, n):")
-    for bin_low, mean_pred, mean_actual, count in result.calibration_bins():
-        print(f"  [{bin_low:.1f}-{bin_low + 0.2:.1f}) pred={mean_pred:.3f} real={mean_actual:.3f} n={count}")
+    bin_width = 1 / n_bins
+    for bin_low, mean_pred, mean_actual, count in result.calibration_bins(n_bins):
+        print(f"  [{bin_low:.1f}-{bin_low + bin_width:.1f}) pred={mean_pred:.3f} real={mean_actual:.3f} n={count}")

@@ -74,6 +74,33 @@ def test_shots_to_records_disambiguates_hyphenated_team_names():
     assert home_record["away_team"] == "Newcastle United"
 
 
+def test_shots_to_records_flips_own_goal_to_the_conceding_team():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-19 Tottenham-Manchester United",
+                "team": "Manchester United", "player": "Lisandro Martinez",
+                "game_id": 303, "minute": 82, "xg": 0.0, "result": "Own Goal",
+            },
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-19 Tottenham-Manchester United",
+                "team": "Tottenham", "player": "Player X",
+                "game_id": 303, "minute": 10, "xg": 0.3, "result": "Missed Shot",
+            },
+        ]
+    )
+    records = shots_to_records(df)
+    own_goal_record = next(r for r in records if r["minute"] == 82)
+    # Shot was attributed to Manchester United (the away team), but the
+    # own goal counts for the home team (Tottenham), so team flips to home.
+    assert own_goal_record["team"] == "home"
+    assert own_goal_record["is_goal"] is True
+    assert own_goal_record["xg"] == 0.0
+    assert own_goal_record["date"] == "2023-08-19"
+
+
 def test_persist_shots_creates_match_and_shots_and_updates_score():
     conn = get_connection(":memory:")
     init_db(conn)
@@ -112,3 +139,56 @@ def test_persist_shots_is_idempotent_for_the_same_match_id():
         "SELECT COUNT(*) FROM matches WHERE understat_id = 202"
     ).fetchone()[0]
     assert match_count == 1
+
+
+def test_persist_shots_second_call_is_a_true_no_op_for_an_already_persisted_match():
+    """Simulates re-running the CLI loader on a match that was already fully
+    persisted: shots and match/goal state from the first call must be left
+    completely untouched, even if the second call is (incorrectly) given a
+    different set of shot records for the same match_id."""
+    conn = get_connection(":memory:")
+    init_db(conn)
+
+    match_a_first_call = [
+        {
+            "match_id": 303, "league": "ENG-Premier League", "season": "2023-24",
+            "home_team": "Arsenal", "away_team": "Chelsea",
+            "minute": 5, "team": "home", "xg": 0.1, "is_goal": False,
+        },
+        {
+            "match_id": 303, "league": "ENG-Premier League", "season": "2023-24",
+            "home_team": "Arsenal", "away_team": "Chelsea",
+            "minute": 30, "team": "home", "xg": 0.5, "is_goal": True,
+        },
+    ]
+    persist_shots(conn, match_a_first_call)
+
+    shots_after_first = conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
+    goals_after_first = conn.execute(
+        "SELECT home_goals, away_goals FROM matches WHERE understat_id = 303"
+    ).fetchone()
+    assert shots_after_first == 2
+    assert goals_after_first == (1, 0)
+
+    # Simulate a naive re-run: same match_id, but different shot records
+    # (as would happen if a fresh fetch from Understat were re-persisted).
+    match_a_second_call_different_shots = [
+        {
+            "match_id": 303, "league": "ENG-Premier League", "season": "2023-24",
+            "home_team": "Arsenal", "away_team": "Chelsea",
+            "minute": 60, "team": "away", "xg": 0.3, "is_goal": True,
+        },
+        {
+            "match_id": 303, "league": "ENG-Premier League", "season": "2023-24",
+            "home_team": "Arsenal", "away_team": "Chelsea",
+            "minute": 75, "team": "away", "xg": 0.2, "is_goal": True,
+        },
+    ]
+    persist_shots(conn, match_a_second_call_different_shots)
+
+    shots_after_second = conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
+    goals_after_second = conn.execute(
+        "SELECT home_goals, away_goals FROM matches WHERE understat_id = 303"
+    ).fetchone()
+    assert shots_after_second == 2
+    assert goals_after_second == (1, 0)
