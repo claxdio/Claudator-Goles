@@ -38,6 +38,14 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
     The date portion (before the first space) is captured verbatim as the
     "date" field.
 
+    A match can legitimately have shot rows from only ONE team: a side that
+    records zero shots in the whole game never appears as an index value
+    (e.g. Bournemouth 0-1 Manchester City on 2019-03-02, Understat game
+    9486, where Bournemouth took no shots). In that case the single known
+    team name is matched as a prefix ("{team}-…") or suffix ("…-{team}") of
+    the game string's teams part to decide its side, and the opponent's
+    name is recovered from the remainder of the game string.
+
     Own goals: Understat records an own goal as a shot row with
     `result == "Own Goal"` attributed to the *shooting* player's own team
     (e.g. a Manchester United defender's own goal is attributed to
@@ -51,20 +59,39 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
     records = []
     for game_id, game_shots in df.groupby("game_id"):
         teams_in_game = game_shots["team"].unique().tolist()
-        if len(teams_in_game) != 2:
-            raise ValueError(
-                f"expected exactly 2 teams for game_id={game_id}, got {teams_in_game}"
-            )
-        team_a, team_b = teams_in_game
         game_str = game_shots["game"].iloc[0]
         date_part, teams_part = game_str.split(" ", 1)
-        if teams_part == f"{team_a}-{team_b}":
-            home_team, away_team = team_a, team_b
-        elif teams_part == f"{team_b}-{team_a}":
-            home_team, away_team = team_b, team_a
+        if len(teams_in_game) == 2:
+            team_a, team_b = teams_in_game
+            if teams_part == f"{team_a}-{team_b}":
+                home_team, away_team = team_a, team_b
+            elif teams_part == f"{team_b}-{team_a}":
+                home_team, away_team = team_b, team_a
+            else:
+                raise ValueError(
+                    f"could not match teams {teams_in_game} against game string {game_str!r}"
+                )
+        elif len(teams_in_game) == 1:
+            # One side took zero shots, so only the other team appears in the
+            # shot rows. Decide the known team's side by matching it against
+            # the start/end of the game string and recover the opponent's
+            # name from the remainder.
+            (team,) = teams_in_game
+            is_home = teams_part.startswith(f"{team}-")
+            is_away = teams_part.endswith(f"-{team}")
+            if is_home == is_away:
+                raise ValueError(
+                    f"could not match team {team!r} against game string {game_str!r}"
+                )
+            if is_home:
+                home_team = team
+                away_team = teams_part[len(team) + 1 :]
+            else:
+                home_team = teams_part[: -(len(team) + 1)]
+                away_team = team
         else:
             raise ValueError(
-                f"could not match teams {teams_in_game} against game string {game_str!r}"
+                f"expected 1 or 2 teams for game_id={game_id}, got {teams_in_game}"
             )
 
         league = game_shots["league"].iloc[0]
