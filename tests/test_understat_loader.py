@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
 from goles.db import get_connection, init_db
 from goles.loaders.understat import (
@@ -192,3 +193,78 @@ def test_persist_shots_second_call_is_a_true_no_op_for_an_already_persisted_matc
     ).fetchone()
     assert shots_after_second == 2
     assert goals_after_second == (1, 0)
+
+
+def test_shots_to_records_handles_home_team_with_zero_shots_from_away_team():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "1819",
+                "game": "2019-03-02 Bournemouth-Manchester City",
+                "team": "Bournemouth", "player": "Player A",
+                "game_id": 9486, "minute": 12, "xg": 0.05, "result": "Missed Shot",
+            },
+        ]
+    )
+    records = shots_to_records(df)
+    assert len(records) == 1
+    assert records[0]["team"] == "home"
+    assert records[0]["home_team"] == "Bournemouth"
+    assert records[0]["away_team"] == "Manchester City"
+
+
+def test_shots_to_records_handles_away_team_with_zero_shots_from_home_team():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "1819",
+                "game": "2019-03-02 Bournemouth-Manchester City",
+                "team": "Manchester City", "player": "Player B",
+                "game_id": 9487, "minute": 67, "xg": 0.8, "result": "Goal",
+            },
+        ]
+    )
+    records = shots_to_records(df)
+    assert len(records) == 1
+    assert records[0]["team"] == "away"
+    assert records[0]["home_team"] == "Bournemouth"
+    assert records[0]["away_team"] == "Manchester City"
+
+
+def test_shots_to_records_raises_when_lone_team_matches_both_prefix_and_suffix():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "1819",
+                "game": "2019-03-02 City-Manchester-City",
+                "team": "City", "player": "Player A",
+                "game_id": 9488, "minute": 20, "xg": 0.1, "result": "Missed Shot",
+            },
+        ]
+    )
+    with pytest.raises(ValueError):
+        shots_to_records(df)
+
+
+def test_shots_to_records_flips_own_goal_when_only_the_scoring_team_has_shots():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-19 Tottenham-Manchester United",
+                "team": "Manchester United", "player": "Lisandro Martinez",
+                "game_id": 9489, "minute": 82, "xg": 0.0, "result": "Own Goal",
+            },
+        ]
+    )
+    records = shots_to_records(df)
+    assert len(records) == 1
+    own_goal_record = records[0]
+    # Manchester United (away) is the only team with shot rows, but its own
+    # goal counts for Tottenham (home), which took no shots at all in this
+    # game — the flip must still land on the correct side.
+    assert own_goal_record["team"] == "home"
+    assert own_goal_record["home_team"] == "Tottenham"
+    assert own_goal_record["away_team"] == "Manchester United"
+    assert own_goal_record["is_goal"] is True
+    assert own_goal_record["xg"] == 0.0
