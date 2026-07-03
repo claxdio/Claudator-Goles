@@ -20,27 +20,58 @@ def test_fetch_understat_shots_delegates_to_soccerdata_reader():
     assert result is fake_df
 
 
+def _make_understat_like_df(rows):
+    df = pd.DataFrame(rows)
+    return df.set_index(["league", "season", "game", "team", "player"])
+
+
 def test_shots_to_records_normalizes_team_side_and_goal_flag():
-    df = pd.DataFrame(
+    df = _make_understat_like_df(
         [
             {
-                "game_id": 101, "league": "ENG-Premier League", "season": "2023-24",
-                "home_team": "Arsenal", "away_team": "Chelsea", "team": "Arsenal",
-                "minute": 23, "xG": 0.15, "result": "MissedShots",
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Arsenal-Chelsea", "team": "Arsenal", "player": "Player A",
+                "game_id": 101, "minute": 23, "xg": 0.15, "result": "Missed Shot",
             },
             {
-                "game_id": 101, "league": "ENG-Premier League", "season": "2023-24",
-                "home_team": "Arsenal", "away_team": "Chelsea", "team": "Chelsea",
-                "minute": 41, "xG": 0.42, "result": "Goal",
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Arsenal-Chelsea", "team": "Chelsea", "player": "Player B",
+                "game_id": 101, "minute": 41, "xg": 0.42, "result": "Goal",
             },
         ]
     )
     records = shots_to_records(df)
     assert records[0]["team"] == "home"
+    assert records[0]["home_team"] == "Arsenal"
+    assert records[0]["away_team"] == "Chelsea"
     assert records[0]["is_goal"] is False
     assert records[1]["team"] == "away"
     assert records[1]["is_goal"] is True
     assert records[1]["xg"] == 0.42
+
+
+def test_shots_to_records_disambiguates_hyphenated_team_names():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Stoke-on-Trent-Newcastle United",
+                "team": "Stoke-on-Trent", "player": "Player A",
+                "game_id": 202, "minute": 10, "xg": 0.2, "result": "Goal",
+            },
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Stoke-on-Trent-Newcastle United",
+                "team": "Newcastle United", "player": "Player B",
+                "game_id": 202, "minute": 55, "xg": 0.3, "result": "Missed Shot",
+            },
+        ]
+    )
+    records = shots_to_records(df)
+    home_record = next(r for r in records if r["minute"] == 10)
+    assert home_record["team"] == "home"
+    assert home_record["home_team"] == "Stoke-on-Trent"
+    assert home_record["away_team"] == "Newcastle United"
 
 
 def test_persist_shots_creates_match_and_shots_and_updates_score():

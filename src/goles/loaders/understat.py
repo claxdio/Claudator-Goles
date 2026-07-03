@@ -18,26 +18,60 @@ def fetch_understat_shots(leagues: list[str], seasons: list[str]) -> pd.DataFram
 
 
 def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
-    """Normalize an Understat shot-events DataFrame into plain dict records
-    with keys: match_id, league, season, home_team, away_team, minute,
-    team ("home"/"away"), xg, is_goal."""
+    """Normalize an Understat shot-events DataFrame (as returned by
+    `fetch_understat_shots`) into plain dict records with keys: match_id,
+    league, season, home_team, away_team, minute, team ("home"/"away"),
+    xg, is_goal.
+
+    The real soccerdata Understat reader returns `league`, `season`, `game`,
+    and `team` as MultiIndex levels (not columns), has no direct home_team/
+    away_team column, and uses a lowercase `xg` column. This function resets
+    the index and derives home/away by matching the two team names that
+    appear as index values for a given game_id against the `game` string,
+    which has the form "{date} {home_team}-{away_team}" — matched exactly
+    against the two known team names (not a naive split on "-") so that
+    hyphenated team names (e.g. "Stoke-on-Trent") don't break disambiguation.
+    """
+    df = shots_df.reset_index()
+
     records = []
-    for row in shots_df.itertuples(index=False):
-        row_dict = row._asdict()
-        team_side = "home" if row_dict["team"] == row_dict["home_team"] else "away"
-        records.append(
-            {
-                "match_id": row_dict["game_id"],
-                "league": row_dict["league"],
-                "season": row_dict["season"],
-                "home_team": row_dict["home_team"],
-                "away_team": row_dict["away_team"],
-                "minute": int(row_dict["minute"]),
-                "team": team_side,
-                "xg": float(row_dict["xG"]),
-                "is_goal": row_dict["result"] == "Goal",
-            }
-        )
+    for game_id, game_shots in df.groupby("game_id"):
+        teams_in_game = game_shots["team"].unique().tolist()
+        if len(teams_in_game) != 2:
+            raise ValueError(
+                f"expected exactly 2 teams for game_id={game_id}, got {teams_in_game}"
+            )
+        team_a, team_b = teams_in_game
+        game_str = game_shots["game"].iloc[0]
+        teams_part = game_str.split(" ", 1)[1]
+        if teams_part == f"{team_a}-{team_b}":
+            home_team, away_team = team_a, team_b
+        elif teams_part == f"{team_b}-{team_a}":
+            home_team, away_team = team_b, team_a
+        else:
+            raise ValueError(
+                f"could not match teams {teams_in_game} against game string {game_str!r}"
+            )
+
+        league = game_shots["league"].iloc[0]
+        season = game_shots["season"].iloc[0]
+
+        for row in game_shots.itertuples(index=False):
+            row_dict = row._asdict()
+            team_side = "home" if row_dict["team"] == home_team else "away"
+            records.append(
+                {
+                    "match_id": row_dict["game_id"],
+                    "league": league,
+                    "season": season,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "minute": int(row_dict["minute"]),
+                    "team": team_side,
+                    "xg": float(row_dict["xg"]),
+                    "is_goal": row_dict["result"] == "Goal",
+                }
+            )
     return records
 
 
