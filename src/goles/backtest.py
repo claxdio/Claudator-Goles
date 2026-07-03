@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from goles.features import compute_state_at_minute, goal_in_window
 from goles.model import dynamic_lambda, prob_goal_in_window
+from goles.priors import trailing_xg_per90
 
 CUTOFF_MINUTES = list(range(20, 81, 5))
 HORIZON_MINUTES = 15
@@ -85,32 +86,32 @@ def _load_match_shots(
     return shots
 
 
-def _pre_match_xg_per90(shots: list[dict], team: str) -> float:
-    """Simplified prior: sums the team's shot xG across the whole match.
-    See the 'look-ahead bias' note in this plan's Global Constraints — this
-    is a placeholder prior for validating the pipeline, not a production
-    pre-match estimate."""
-    return sum(s["xg"] for s in shots if s["team"] == team)
-
-
 def run_backtest(
-    conn: sqlite3.Connection, team: str = "home", blend: float = DEFAULT_BLEND
+    conn: sqlite3.Connection,
+    team: str = "home",
+    blend: float = DEFAULT_BLEND,
+    cutoff_minutes: list[int] = CUTOFF_MINUTES,
 ) -> BacktestResult:
-    """Replays every stored match at each cutoff minute in CUTOFF_MINUTES,
+    """Replays every stored match at each cutoff minute in `cutoff_minutes`,
     predicting P(goal in the next HORIZON_MINUTES for `team`) with the
-    Poisson baseline, and comparing it against what actually happened."""
+    Poisson baseline -- using each team's trailing season-to-date average
+    xG as the pre-match prior (never the match's own xG) -- and comparing
+    it against what actually happened."""
     predicted_probs: list[float] = []
     actual_outcomes: list[bool] = []
 
-    matches = conn.execute("SELECT match_id, home_team_id, away_team_id FROM matches").fetchall()
+    matches = conn.execute(
+        "SELECT match_id, home_team_id, away_team_id, league, season FROM matches"
+    ).fetchall()
 
-    for match_id, home_team_id, away_team_id in matches:
+    for match_id, home_team_id, away_team_id, league, season in matches:
         shots = _load_match_shots(conn, match_id, home_team_id, away_team_id)
         if not shots:
             continue
-        pre_match_xg = _pre_match_xg_per90(shots, team)
+        team_id = home_team_id if team == "home" else away_team_id
+        pre_match_xg = trailing_xg_per90(conn, team_id, league, season, match_id)
 
-        for cutoff in CUTOFF_MINUTES:
+        for cutoff in cutoff_minutes:
             state = compute_state_at_minute(shots, cutoff, window=RECENT_WINDOW_MINUTES)
             recent_xg = state.home_xg_last15 if team == "home" else state.away_xg_last15
             lam = dynamic_lambda(
@@ -124,6 +125,31 @@ def run_backtest(
             actual_outcomes.append(goal_in_window(shots, cutoff, HORIZON_MINUTES, team))
 
     return BacktestResult(predicted_probs=predicted_probs, actual_outcomes=actual_outcomes)
+
+
+def compare_blends(
+    conn: sqlite3.Connection,
+    team: str,
+    blends: list[float],
+    cutoff_minutes: list[int] = CUTOFF_MINUTES,
+) -> dict[float, BacktestResult]:
+    """Runs run_backtest once per blend value and returns each result keyed
+    by the blend used, so different blend settings can be compared on the
+    same data."""
+    return {
+        blend: run_backtest(conn, team=team, blend=blend, cutoff_minutes=cutoff_minutes)
+        for blend in blends
+    }
+
+
+def print_comparison(results: dict[float, BacktestResult]) -> None:
+    print(f"{'blend':>6} | {'brier':>8} | {'no-skill':>8} | {'BSS':>8} | {'n':>6}")
+    for blend, result in sorted(results.items()):
+        print(
+            f"{blend:6.2f} | {result.brier_score:8.4f} | "
+            f"{result.no_skill_brier_score:8.4f} | {result.brier_skill_score:8.4f} | "
+            f"{len(result.predicted_probs):6d}"
+        )
 
 
 def print_report(result: BacktestResult, n_bins: int = 5) -> None:

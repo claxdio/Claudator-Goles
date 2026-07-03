@@ -1,6 +1,6 @@
 import math
 
-from goles.backtest import CUTOFF_MINUTES, BacktestResult, run_backtest
+from goles.backtest import CUTOFF_MINUTES, BacktestResult, compare_blends, run_backtest
 from goles.db import get_connection, init_db
 from goles.loaders.understat import persist_shots
 
@@ -91,3 +91,79 @@ def test_brier_skill_score_is_zero_when_model_matches_naive_baseline():
         actual_outcomes=[False, True, True, False],
     )
     assert abs(result.brier_skill_score - 0.0) < 1e-9
+
+
+def _seed_two_chronological_matches(conn):
+    """Two matches for the same home team (Team A) in the same
+    league/season, on different dates, so the trailing prior for the
+    second match must come from the first match's xG -- never from the
+    second match's own shots."""
+    records_m1 = [
+        {
+            "match_id": 501, "league": "TEST", "season": "2025-26", "date": "2025-08-01",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 20, "team": "home", "xg": 3.0, "is_goal": False,
+        },
+    ]
+    persist_shots(conn, records_m1)
+
+    records_m2 = [
+        {
+            "match_id": 502, "league": "TEST", "season": "2025-26", "date": "2025-08-10",
+            "home_team": "Team A", "away_team": "Team C",
+            "minute": 30, "team": "home", "xg": 9.0, "is_goal": True,
+        },
+        {
+            "match_id": 502, "league": "TEST", "season": "2025-26", "date": "2025-08-10",
+            "home_team": "Team A", "away_team": "Team C",
+            "minute": 78, "team": "away", "xg": 0.4, "is_goal": False,
+        },
+    ]
+    persist_shots(conn, records_m2)
+    conn.commit()
+
+
+def test_run_backtest_uses_trailing_prior_not_same_match_xg():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    _seed_two_chronological_matches(conn)
+
+    result = run_backtest(conn, team="home", cutoff_minutes=[20])
+    assert len(result.predicted_probs) == 2
+
+    # Match 501 (Team A's first match this season): trailing prior = 0.0
+    # (no earlier match), but its own shot at minute 20 falls inside the
+    # (5,20] rolling window, so in_match_xg_recent=3.0 drives the
+    # prediction: lambda = 0.5*(3.0/15)*15 = 1.5
+    expected_m501 = 1.0 - math.exp(-1.5)
+
+    # Match 502 (Team A's second match): trailing prior = 3.0, taken from
+    # match 501 -- NOT match 502's own 9.0 xG shot, which the fix must
+    # never use as this match's own prior. No home shots fall inside match
+    # 502's (5,20] window (its only home shot is at minute 30), so
+    # in_match_xg_recent=0: lambda = 0.5*(3.0/90)*15 = 0.25
+    expected_m502 = 1.0 - math.exp(-0.25)
+
+    assert sorted(round(p, 6) for p in result.predicted_probs) == sorted(
+        round(p, 6) for p in [expected_m501, expected_m502]
+    )
+
+
+def test_run_backtest_accepts_custom_cutoff_minutes():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    _seed_two_chronological_matches(conn)
+
+    result = run_backtest(conn, team="home", cutoff_minutes=[10, 20, 30])
+    assert len(result.predicted_probs) == 2 * 3
+
+
+def test_compare_blends_returns_one_result_per_blend():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    _seed_two_chronological_matches(conn)
+
+    results = compare_blends(conn, team="home", blends=[0.0, 0.5, 1.0], cutoff_minutes=[20])
+    assert set(results.keys()) == {0.0, 0.5, 1.0}
+    for result in results.values():
+        assert len(result.predicted_probs) == 2
