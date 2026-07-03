@@ -72,7 +72,7 @@ class BacktestResult:
         return report
 
 
-def _load_match_shots(
+def load_match_shots(
     conn: sqlite3.Connection, match_id: int, home_team_id: int, away_team_id: int
 ) -> list[dict]:
     rows = conn.execute(
@@ -105,7 +105,7 @@ def run_backtest(
     ).fetchall()
 
     for match_id, home_team_id, away_team_id, league, season in matches:
-        shots = _load_match_shots(conn, match_id, home_team_id, away_team_id)
+        shots = load_match_shots(conn, match_id, home_team_id, away_team_id)
         if not shots:
             continue
         team_id = home_team_id if team == "home" else away_team_id
