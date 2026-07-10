@@ -9,8 +9,15 @@ TEST_SEASON = "2324"
 VALIDATION_SEASON = "2223"
 # blend=0.1 was the best-performing (least-bad) Poisson configuration found
 # in the calibration-improvements plan's real backtest -- used here so the
-# Poisson comparison in this report reflects the strongest baseline found
-# so far, not the arbitrary original default of 0.5.
+# Poisson comparison reflects the strongest baseline found so far, not the
+# arbitrary original default of 0.5. CAVEAT: that backtest only had the 2324
+# season loaded at the time, so blend=0.1 was effectively selected on what is
+# now this script's TEST_SEASON -- the Poisson comparison below is not a
+# clean held-out evaluation the way the LightGBM result is. This can only
+# bias the comparison in Poisson's favor (a blend tuned to look good on 2324
+# should, if anything, outperform its true generalization there), so it does
+# not inflate LightGBM's apparent edge -- if anything the real gap may be
+# larger than reported.
 POISSON_COMPARISON_BLEND = 0.1
 
 
