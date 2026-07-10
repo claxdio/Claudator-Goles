@@ -1,4 +1,8 @@
 import random
+from unittest.mock import patch
+
+import numpy as np
+import pytest
 
 from goles.gbt_model import apply_platt_scaling, fit_platt_scaling, raw_predictions, train_gbt
 
@@ -48,3 +52,14 @@ def test_platt_scaling_corrects_a_systematically_overconfident_model():
     a, b = fit_platt_scaling(raw_probs, y_true)
     calibrated = apply_platt_scaling(raw_probs, a, b)
     assert abs(calibrated[0] - true_rate) < abs(0.8 - true_rate)
+
+
+def test_fit_platt_scaling_raises_when_optimizer_does_not_converge():
+    class FakeResult:
+        success = False
+        message = "mock optimizer failure"
+        x = np.array([1.0, 0.0])
+
+    with patch("goles.gbt_model.minimize", return_value=FakeResult()):
+        with pytest.raises(RuntimeError, match="mock optimizer failure"):
+            fit_platt_scaling([0.1, 0.9], [0, 1])
