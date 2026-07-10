@@ -66,7 +66,12 @@ def fit_platt_scaling(raw_probs: list[float], y_true: list[int]) -> tuple[float,
         log_one_minus_sig = -np.logaddexp(0.0, z)
         return -np.sum(y * log_sig + (1 - y) * log_one_minus_sig)
 
-    result = minimize(neg_log_likelihood, x0=np.array([1.0, 0.0]), method="Nelder-Mead")
+    result = minimize(
+        neg_log_likelihood,
+        x0=np.array([1.0, 0.0]),
+        method="Nelder-Mead",
+        options={"maxiter": 10000, "maxfev": 10000},
+    )
     if not result.success:
         raise RuntimeError(f"Platt scaling optimization did not converge: {result.message}")
     a, b = result.x
