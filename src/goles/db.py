@@ -33,7 +33,12 @@ CREATE TABLE IF NOT EXISTS shots (
     minute INTEGER NOT NULL,
     team_id INTEGER NOT NULL REFERENCES teams(team_id),
     xg REAL NOT NULL,
-    is_goal INTEGER NOT NULL
+    is_goal INTEGER NOT NULL,
+    location_x REAL,
+    location_y REAL,
+    situation TEXT,
+    shot_type TEXT,
+    last_action TEXT
 );
 
 CREATE TABLE IF NOT EXISTS elo_ratings (

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import soccerdata as sd
@@ -21,11 +23,42 @@ def fetch_understat_shots(leagues: list[str], seasons: list[str]) -> pd.DataFram
     return reader.read_shot_events()
 
 
-def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
+def load_shot_details_from_cache(cache_dir: Path) -> dict[int, dict]:
+    """Reads the raw cached Understat match JSONs (match_{id}.json) and
+    returns a mapping shot_id -> {situation, shot_type, last_action}.
+
+    This exists because the soccerdata-normalized DataFrame corrupts these
+    fields (verified empirically: 'Head'/'OtherBodyPart' body parts and
+    'Penalty' situations all become NA in the normalized output, and
+    lastAction is not exposed at all) -- the raw JSON is the only reliable
+    source. location_x/location_y are NOT read here because they survive
+    normalization intact and come from the DataFrame instead."""
+    details: dict[int, dict] = {}
+    for match_file in Path(cache_dir).glob("match_*.json"):
+        with open(match_file, encoding="utf-8") as fh:
+            data = json.load(fh)
+        shots = data.get("shots", {})
+        if not isinstance(shots, dict):
+            continue
+        for shot in shots.get("h", []) + shots.get("a", []):
+            details[int(shot["id"])] = {
+                "situation": shot.get("situation"),
+                "shot_type": shot.get("shotType"),
+                "last_action": shot.get("lastAction"),
+            }
+    return details
+
+
+def shots_to_records(shots_df: pd.DataFrame, shot_details: dict[int, dict] | None = None) -> list[dict]:
     """Normalize an Understat shot-events DataFrame (as returned by
     `fetch_understat_shots`) into plain dict records with keys: match_id,
     league, season, home_team, away_team, date, minute, team ("home"/"away"),
     xg, is_goal.
+
+    Records also carry `location_x`, `location_y` (read straight from the
+    DataFrame, may be None if the columns are absent) and `situation`,
+    `shot_type`, `last_action` (looked up in `shot_details` by shot_id, all
+    None when `shot_details` is None or the id is missing from it).
 
     The real soccerdata Understat reader returns `league`, `season`, `game`,
     and `team` as MultiIndex levels (not columns), has no direct home_team/
@@ -112,6 +145,10 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
             else:
                 xg = float(row_dict["xg"])
                 is_goal = row_dict["result"] == "Goal"
+            raw_shot_id = row_dict.get("shot_id")
+            detail = (shot_details or {}).get(int(raw_shot_id)) if raw_shot_id is not None else None
+            loc_x = row_dict.get("location_x")
+            loc_y = row_dict.get("location_y")
             records.append(
                 {
                     "match_id": row_dict["game_id"],
@@ -124,6 +161,11 @@ def shots_to_records(shots_df: pd.DataFrame) -> list[dict]:
                     "team": team_side,
                     "xg": xg,
                     "is_goal": is_goal,
+                    "location_x": float(loc_x) if loc_x is not None and not pd.isna(loc_x) else None,
+                    "location_y": float(loc_y) if loc_y is not None and not pd.isna(loc_y) else None,
+                    "situation": detail.get("situation") if detail else None,
+                    "shot_type": detail.get("shot_type") if detail else None,
+                    "last_action": detail.get("last_action") if detail else None,
                 }
             )
     return records
@@ -191,8 +233,15 @@ def persist_shots(conn: sqlite3.Connection, records: list[dict]) -> None:
         away_id = get_or_create_team(conn, rec["away_team"])
         team_id = home_id if rec["team"] == "home" else away_id
         conn.execute(
-            "INSERT INTO shots (match_id, minute, team_id, xg, is_goal) VALUES (?, ?, ?, ?, ?)",
-            (match_id, rec["minute"], team_id, rec["xg"], int(rec["is_goal"])),
+            """INSERT INTO shots
+               (match_id, minute, team_id, xg, is_goal,
+                location_x, location_y, situation, shot_type, last_action)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                match_id, rec["minute"], team_id, rec["xg"], int(rec["is_goal"]),
+                rec.get("location_x"), rec.get("location_y"),
+                rec.get("situation"), rec.get("shot_type"), rec.get("last_action"),
+            ),
         )
         if rec["is_goal"]:
             goal_col = "home_goals" if rec["team"] == "home" else "away_goals"

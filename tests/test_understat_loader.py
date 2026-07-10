@@ -6,6 +6,7 @@ import pytest
 from goles.db import get_connection, init_db
 from goles.loaders.understat import (
     fetch_understat_shots,
+    load_shot_details_from_cache,
     persist_shots,
     shots_to_records,
 )
@@ -268,3 +269,82 @@ def test_shots_to_records_flips_own_goal_when_only_the_scoring_team_has_shots():
     assert own_goal_record["away_team"] == "Manchester United"
     assert own_goal_record["is_goal"] is True
     assert own_goal_record["xg"] == 0.0
+
+
+def test_shots_to_records_carries_location_and_details():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Arsenal-Chelsea", "team": "Arsenal", "player": "Player A",
+                "game_id": 901, "shot_id": 5001, "minute": 23, "xg": 0.15,
+                "result": "Missed Shot", "location_x": 0.91, "location_y": 0.48,
+            },
+        ]
+    )
+    details = {5001: {"situation": "OpenPlay", "shot_type": "Head", "last_action": "Throughball"}}
+    records = shots_to_records(df, shot_details=details)
+    rec = records[0]
+    assert rec["location_x"] == 0.91
+    assert rec["location_y"] == 0.48
+    assert rec["situation"] == "OpenPlay"
+    assert rec["shot_type"] == "Head"
+    assert rec["last_action"] == "Throughball"
+
+
+def test_shots_to_records_defaults_details_to_none_when_absent():
+    df = _make_understat_like_df(
+        [
+            {
+                "league": "ENG-Premier League", "season": "2324",
+                "game": "2023-08-11 Arsenal-Chelsea", "team": "Arsenal", "player": "Player A",
+                "game_id": 902, "shot_id": 5002, "minute": 10, "xg": 0.1,
+                "result": "Goal", "location_x": 0.88, "location_y": 0.5,
+            },
+        ]
+    )
+    records = shots_to_records(df)  # no shot_details at all
+    rec = records[0]
+    assert rec["situation"] is None
+    assert rec["shot_type"] is None
+    assert rec["last_action"] is None
+    assert rec["location_x"] == 0.88
+
+
+def test_persist_shots_stores_enrichment_columns():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    records = [
+        {
+            "match_id": 903, "league": "TEST", "season": "2324", "date": "2023-09-01",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 30, "team": "home", "xg": 0.4, "is_goal": True,
+            "location_x": 0.9, "location_y": 0.45,
+            "situation": "FromCorner", "shot_type": "Head", "last_action": "Cross",
+        },
+    ]
+    persist_shots(conn, records)
+    row = conn.execute(
+        "SELECT location_x, location_y, situation, shot_type, last_action FROM shots"
+    ).fetchone()
+    assert row == (0.9, 0.45, "FromCorner", "Head", "Cross")
+
+
+def test_load_shot_details_from_cache_reads_raw_match_json(tmp_path):
+    import json
+
+    match_file = tmp_path / "match_777.json"
+    match_file.write_text(json.dumps({
+        "shots": {
+            "h": [{"id": "111", "situation": "OpenPlay", "shotType": "LeftFoot",
+                   "lastAction": "Pass", "minute": "10"}],
+            "a": [{"id": "222", "situation": "Penalty", "shotType": "RightFoot",
+                   "lastAction": "Standard", "minute": "55"}],
+        }
+    }), encoding="utf-8")
+    (tmp_path / "league_1_season_2023.json").write_text("{}", encoding="utf-8")  # non-match file, must be ignored
+
+    details = load_shot_details_from_cache(tmp_path)
+    assert details[111] == {"situation": "OpenPlay", "shot_type": "LeftFoot", "last_action": "Pass"}
+    assert details[222] == {"situation": "Penalty", "shot_type": "RightFoot", "last_action": "Standard"}
+    assert len(details) == 2
