@@ -113,6 +113,28 @@ def compute_ml_features(shots: list[dict], cutoff_minute: int, team: str) -> dic
 
     score_diff = float(own_goals - opp_goals)
 
+    BOX_X_THRESHOLD = 0.84  # Understat X is 0-1 toward the attacking goal; box edge ~= 1 - 16.5/105
+    SETPIECE_SITUATIONS = {"SetPiece", "FromCorner", "DirectFreekick"}
+    LINEBREAK_ACTIONS = {"Throughball", "TakeOn"}
+    TRANSITION_ACTIONS = {"BallRecovery", "Rebound"}
+
+    def _is_box(s: dict) -> bool:
+        x = s.get("location_x")
+        return x is not None and x >= BOX_X_THRESHOLD
+
+    own_box_xg_total = sum(s["xg"] for s in own_shots if _is_box(s))
+    opp_box_xg_total = sum(s["xg"] for s in opp_shots if _is_box(s))
+    own_box_shots_recent = float(
+        sum(1 for s in own_shots if _is_box(s) and s["minute"] > recent_window_start)
+    )
+    own_setpiece_xg = sum(s["xg"] for s in own_shots if s.get("situation") in SETPIECE_SITUATIONS)
+    opp_setpiece_xg = sum(s["xg"] for s in opp_shots if s.get("situation") in SETPIECE_SITUATIONS)
+    # Experimental: derived from Understat's lastAction, which has NO live
+    # equivalent in the Sofascore/FotMob feeds -- if these prove valuable,
+    # Phase 2 must find a live proxy or retrain without them.
+    own_linebreak_shots = float(sum(1 for s in own_shots if s.get("last_action") in LINEBREAK_ACTIONS))
+    own_transition_shots = float(sum(1 for s in own_shots if s.get("last_action") in TRANSITION_ACTIONS))
+
     return {
         "is_home": 1.0 if team == "home" else 0.0,
         "minute": float(cutoff_minute),
@@ -133,4 +155,11 @@ def compute_ml_features(shots: list[dict], cutoff_minute: int, team: str) -> dic
         "own_trend": own_trend,
         "own_time_since_shot": own_time_since_shot,
         "time_since_goal": time_since_goal,
+        "own_box_xg_total": own_box_xg_total,
+        "opp_box_xg_total": opp_box_xg_total,
+        "own_box_shots_recent": own_box_shots_recent,
+        "own_setpiece_xg": own_setpiece_xg,
+        "opp_setpiece_xg": opp_setpiece_xg,
+        "own_linebreak_shots": own_linebreak_shots,
+        "own_transition_shots": own_transition_shots,
     }

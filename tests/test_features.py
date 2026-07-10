@@ -100,3 +100,49 @@ def test_compute_ml_features_trend_ratio_reflects_recent_burst():
     own_recent_rate = 0.40 / 15  # only the minute-34 shot falls in (25,40]
     expected_trend = own_recent_rate / own_xg_rate
     assert abs(features["own_trend"] - expected_trend) < 1e-6
+
+
+ENRICHED_SHOTS = [
+    {"minute": 10, "team": "home", "xg": 0.05, "is_goal": False,
+     "location_x": 0.70, "situation": "OpenPlay", "last_action": "Pass"},
+    {"minute": 20, "team": "home", "xg": 0.30, "is_goal": False,
+     "location_x": 0.90, "situation": "OpenPlay", "last_action": "Throughball"},
+    {"minute": 30, "team": "home", "xg": 0.10, "is_goal": False,
+     "location_x": 0.88, "situation": "FromCorner", "last_action": "Cross"},
+    {"minute": 55, "team": "home", "xg": 0.20, "is_goal": True,
+     "location_x": 0.95, "situation": "OpenPlay", "last_action": "BallRecovery"},
+    {"minute": 40, "team": "away", "xg": 0.15, "is_goal": False,
+     "location_x": 0.86, "situation": "SetPiece", "last_action": "Aerial"},
+]
+
+
+def test_box_features_use_x_threshold():
+    f = compute_ml_features(ENRICHED_SHOTS, cutoff_minute=60, team="home")
+    # home box shots (x >= 0.84): 0.30 @20, 0.10 @30, 0.20 @55 -> xg total 0.60
+    assert abs(f["own_box_xg_total"] - 0.60) < 1e-9
+    # away box shots: the 0.15 @40 -> 0.15
+    assert abs(f["opp_box_xg_total"] - 0.15) < 1e-9
+    # recent window (45,60]: only the @55 box shot
+    assert f["own_box_shots_recent"] == 1.0
+
+
+def test_setpiece_xg_split():
+    f = compute_ml_features(ENRICHED_SHOTS, cutoff_minute=60, team="home")
+    # home set-piece situations (FromCorner/SetPiece/DirectFreekick): the 0.10 corner shot
+    assert abs(f["own_setpiece_xg"] - 0.10) < 1e-9
+    # away: the 0.15 SetPiece shot
+    assert abs(f["opp_setpiece_xg"] - 0.15) < 1e-9
+
+
+def test_linebreak_and_transition_counts():
+    f = compute_ml_features(ENRICHED_SHOTS, cutoff_minute=60, team="home")
+    assert f["own_linebreak_shots"] == 1.0  # the Throughball
+    assert f["own_transition_shots"] == 1.0  # the BallRecovery
+
+
+def test_enrichment_features_default_to_zero_without_enriched_data():
+    f = compute_ml_features(ML_SAMPLE_SHOTS, cutoff_minute=65, team="home")
+    assert f["own_box_xg_total"] == 0.0
+    assert f["own_setpiece_xg"] == 0.0
+    assert f["own_linebreak_shots"] == 0.0
+    assert f["own_transition_shots"] == 0.0

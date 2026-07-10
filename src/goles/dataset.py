@@ -34,6 +34,13 @@ FEATURE_NAMES = [
     "own_trend",
     "own_time_since_shot",
     "time_since_goal",
+    "own_box_xg_total",
+    "opp_box_xg_total",
+    "own_box_shots_recent",
+    "own_setpiece_xg",
+    "opp_setpiece_xg",
+    "own_linebreak_shots",
+    "own_transition_shots",
     "trailing_prior_xg",
     "poisson_prob",
 ]
