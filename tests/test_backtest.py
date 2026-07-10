@@ -167,3 +167,27 @@ def test_compare_blends_returns_one_result_per_blend():
     assert set(results.keys()) == {0.0, 0.5, 1.0}
     for result in results.values():
         assert len(result.predicted_probs) == 2
+
+
+def test_load_match_shots_carries_enrichment_fields():
+    from goles.backtest import load_match_shots
+
+    conn = get_connection(":memory:")
+    init_db(conn)
+    persist_shots(conn, [
+        {
+            "match_id": 601, "league": "TEST", "season": "2526", "date": "2025-08-01",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 12, "team": "home", "xg": 0.3, "is_goal": False,
+            "location_x": 0.9, "location_y": 0.5,
+            "situation": "OpenPlay", "shot_type": "Head", "last_action": "Cross",
+        },
+    ])
+    match_id, home_id, away_id = conn.execute(
+        "SELECT match_id, home_team_id, away_team_id FROM matches"
+    ).fetchone()
+    shots = load_match_shots(conn, match_id, home_id, away_id)
+    assert shots[0]["location_x"] == 0.9
+    assert shots[0]["situation"] == "OpenPlay"
+    assert shots[0]["shot_type"] == "Head"
+    assert shots[0]["last_action"] == "Cross"

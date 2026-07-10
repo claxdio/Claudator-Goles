@@ -76,13 +76,21 @@ def load_match_shots(
     conn: sqlite3.Connection, match_id: int, home_team_id: int, away_team_id: int
 ) -> list[dict]:
     rows = conn.execute(
-        "SELECT minute, team_id, xg, is_goal FROM shots WHERE match_id = ? ORDER BY minute",
+        """SELECT minute, team_id, xg, is_goal,
+                  location_x, location_y, situation, shot_type, last_action
+           FROM shots WHERE match_id = ? ORDER BY minute""",
         (match_id,),
     ).fetchall()
     shots = []
-    for minute, team_id, xg, is_goal in rows:
+    for minute, team_id, xg, is_goal, loc_x, loc_y, situation, shot_type, last_action in rows:
         team = "home" if team_id == home_team_id else "away"
-        shots.append({"minute": minute, "team": team, "xg": xg, "is_goal": bool(is_goal)})
+        shots.append(
+            {
+                "minute": minute, "team": team, "xg": xg, "is_goal": bool(is_goal),
+                "location_x": loc_x, "location_y": loc_y,
+                "situation": situation, "shot_type": shot_type, "last_action": last_action,
+            }
+        )
     return shots
 
 
