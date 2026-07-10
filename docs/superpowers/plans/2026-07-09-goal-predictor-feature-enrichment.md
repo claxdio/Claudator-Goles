@@ -541,6 +541,21 @@ git add docs/superpowers/plans/2026-07-09-goal-predictor-feature-enrichment.md
 git commit -m "docs: record feature-enrichment before/after training results"
 ```
 
+## Resultado
+
+Ran both training scripts unmodified after the enrichment plumbing (Tasks 1-4) landed and `data/goles.db` was rebuilt with 106,538 shots (100% carrying `situation`/`shot_type`/`last_action`/coordinates).
+
+| Run | Baseline BSS | New BSS | Δ |
+|---|---|---|---|
+| `train_gbt.py` (test 2324) | 0.0193 | **0.0190** | -0.0003 |
+| `train_gbt_replication.py` (test 2223) | 0.0167 | **0.0160** | -0.0007 |
+
+Both deltas fall well within the plan's ±0.002 "flat" band — neither run improved, neither got meaningfully worse. Per the plan's decision rule, the honest conclusion is that **Understat's xG already encodes most of the box/set-piece signal the sports-science review predicted would help** (xG itself is built from shot location, situation, and body part, so the new features are largely redundant information already summarized by `xg`/`own_xg_total`/etc.). Feature-importance rankings support this: `own_box_xg_total` and `own_setpiece_xg` land mid-table (ranks ~10-16 of 28 in both runs) rather than top, i.e. present but not decisive.
+
+Per the plan's guidance for a flat result, the features are being **kept** (data plumbing + features cost nothing at this data scale and may matter more once live xG models diverge from Understat's in Phase 2) rather than reverted.
+
+The two `lastAction`-derived experimental features (no live equivalent) ranked in the bottom third of importance in both runs — main: `own_linebreak_shots` 21/28, `own_transition_shots` 26/28; replication: `own_linebreak_shots` 20/28, `own_transition_shots` 26/28. Consistent with the plan's expectation: dropping them for Phase 2 would be cost-free.
+
 ## Próximos pasos (fuera de alcance de este plan)
 
-Whatever the retrain outcome, the next milestones remain (from the GBT plan's Próximos pasos): model persistence (booster + Platt params) and the Phase 2 live pipeline. If the enrichment wins, Phase 2's live feature computation must map each feature to its Sofascore/FotMob live-shotmap equivalent (coordinates/situation/body part are available live; `lastAction` is not — see the experimental tags in `compute_ml_features`). The Squawka lead (possible free Opta-sourced progression stats) stays parked until the user asks for it.
+Whatever the retrain outcome, the next milestones remain (from the GBT plan's Próximos pasos): model persistence (booster + Platt params) and the Phase 2 live pipeline. If the enrichment wins, Phase 2's live feature computation must map each feature to its Sofascore/FotMob live-shotmap equivalent (coordinates/situation/body part are available live; `lastAction` is not — see the experimental tags in `compute_ml_features`). The Squawka lead (possible free Opta-sourced progression stats) stays parked until the user asks for it. Given the flat result here, Phase 2 should specifically re-evaluate whether the two `lastAction`-derived features (no live equivalent) are worth dropping before building the live feature pipeline.
