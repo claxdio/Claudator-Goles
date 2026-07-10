@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from goles.db import get_connection, init_db
-from goles.loaders.understat import fetch_understat_shots, persist_shots, shots_to_records
+from goles.loaders.understat import (
+    fetch_understat_shots,
+    load_shot_details_from_cache,
+    persist_shots,
+    shots_to_records,
+)
 
 LEAGUES = ["ENG-Premier League", "GER-Bundesliga"]
 # Six seasons gives ~4,100 total matches across both leagues -- enough that
@@ -19,8 +24,17 @@ def main() -> None:
     print(f"Descargando datos de Understat para {LEAGUES} temporadas {SEASONS}...")
     print("La primera corrida sin cache puede tardar bastante (~1 partido/seg).")
     shots_df = fetch_understat_shots(LEAGUES, SEASONS)
-    records = shots_to_records(shots_df)
-    print(f"{len(records)} eventos de tiro descargados. Guardando en la base de datos...")
+
+    from soccerdata._config import DATA_DIR
+
+    cache_dir = DATA_DIR / "Understat"
+    print(f"Leyendo detalles de tiro (situation/shotType/lastAction) del cache crudo en {cache_dir}...")
+    shot_details = load_shot_details_from_cache(cache_dir)
+    print(f"{len(shot_details)} tiros con detalle crudo encontrados.")
+
+    records = shots_to_records(shots_df, shot_details=shot_details)
+    enriched = sum(1 for r in records if r["situation"] is not None)
+    print(f"{len(records)} eventos de tiro descargados ({enriched} con situation enriquecida). Guardando...")
     persist_shots(conn, records)
     print("Listo.")
 
