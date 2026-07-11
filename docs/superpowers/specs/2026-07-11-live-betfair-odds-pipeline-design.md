@@ -57,3 +57,11 @@ New subpackage `src/goles/betfair/`, kept separate from the existing training pi
 - No Telegram bot — separate follow-up plan.
 - No ClubElo wiring — already deprioritized in the market-odds plan's "Próximos pasos" now that market odds cover similar ground.
 - No ability to place the certificate/credentials setup on the user's behalf beyond generating the cert files themselves (the Betfair-side account actions are inherently manual).
+
+## Estado de despliegue
+
+Deployed as a new Dokploy Application, `betfair-odds-poller`, inside the existing `Claudator-Goles` project's `production` environment (`http://85.239.245.73:3000`). Configuration: GitHub source (`claxdio/Claudator-Goles`, branch `master`), Dockerfile build (`Dockerfile.betfair`), a named volume (`betfair-odds-poller-data` → `/app/data`) for `live_odds.db` persistence, and two bind mounts wiring the Task 1 certificate/key (`/root/goles-betfair-certs/client-2048.{crt,key}` on the host → `/run/secrets/betfair/client-2048.{crt,key}` in the container). The Dokploy GitHub App needed its repository access extended to this repo first (it only had the `anjuma` project before) — a one-time GitHub setting change.
+
+Real run confirmed the whole build/deploy/mount pipeline end-to-end: the Docker image built successfully from the git repo (~90s, consistent with the manual build test), the container started, and it crashed immediately with a clean `KeyError: 'BETFAIR_APP_KEY'` traceback in the Dokploy Logs tab — exactly the loud, readable failure mode required, since `BETFAIR_APP_KEY`/`BETFAIR_USERNAME`/`BETFAIR_PASSWORD` were deliberately left unset.
+
+**Remaining before real odds flow:** the user has already obtained the delayed Application Key (visible in Betfair's Accounts API Demo Tool) and uploaded the Task 1 certificate to their Betfair account's security settings during this session. The only remaining step is entering the three real environment variable values into the Dokploy Application's Environment tab and redeploying — no further code or infrastructure changes are needed.
