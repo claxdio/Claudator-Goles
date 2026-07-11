@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 
 import pandas as pd
 import requests
+
+from goles.db import get_or_create_team
 
 LEAGUE_CODES = {
     "ENG-Premier League": "E0",
@@ -71,3 +74,75 @@ def fetch_odds(leagues: dict[str, str], seasons: list[str]) -> pd.DataFrame:
             df["understat_season"] = season
             frames.append(df)
     return pd.concat(frames, ignore_index=True)
+
+
+def compute_no_vig_probabilities(
+    odds_home: float, odds_draw: float, odds_away: float
+) -> tuple[float, float, float]:
+    """Converts three decimal odds into de-margined (no-vig) probabilities
+    that sum to exactly 1.0, by normalizing the raw 1/odds values (whose
+    sum exceeds 1.0 by the bookmaker's overround)."""
+    raw = [1.0 / odds_home, 1.0 / odds_draw, 1.0 / odds_away]
+    total = sum(raw)
+    return raw[0] / total, raw[1] / total, raw[2] / total
+
+
+def compute_no_vig_two_way(odds_a: float, odds_b: float) -> tuple[float, float]:
+    """Same de-margining for a two-outcome market (e.g. over/under 2.5)."""
+    raw = [1.0 / odds_a, 1.0 / odds_b]
+    total = sum(raw)
+    return raw[0] / total, raw[1] / total
+
+
+def _to_iso_date(football_data_date: str) -> str:
+    """Converts football-data.co.uk's DD/MM/YYYY to our ISO YYYY-MM-DD."""
+    day, month, year = football_data_date.split("/")
+    if len(year) == 2:
+        year = "20" + year
+    return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+
+
+def persist_odds(conn: sqlite3.Connection, odds_df: pd.DataFrame) -> tuple[int, int]:
+    """Normalizes team names, converts dates, computes no-vig probabilities,
+    and updates matching rows in `matches` (joined by league + season +
+    date + home/away team name, since football-data.co.uk has no id
+    compatible with our understat_id). Rows with no matching database row
+    are counted as unmatched but do not raise -- the caller decides what
+    coverage is acceptable. Returns (matched_count, unmatched_count)."""
+    matched = 0
+    unmatched = 0
+    for row_dict in odds_df.to_dict("records"):
+        home_name = normalize_team_name(row_dict["HomeTeam"])
+        away_name = normalize_team_name(row_dict["AwayTeam"])
+        date_iso = _to_iso_date(row_dict["Date"])
+
+        home_row = conn.execute("SELECT team_id FROM teams WHERE name = ?", (home_name,)).fetchone()
+        away_row = conn.execute("SELECT team_id FROM teams WHERE name = ?", (away_name,)).fetchone()
+        if home_row is None or away_row is None:
+            unmatched += 1
+            continue
+        home_id, away_id = home_row[0], away_row[0]
+
+        match_row = conn.execute(
+            """SELECT match_id FROM matches
+               WHERE league = ? AND season = ? AND date = ?
+                 AND home_team_id = ? AND away_team_id = ?""",
+            (row_dict["understat_league"], row_dict["understat_season"], date_iso, home_id, away_id),
+        ).fetchone()
+        if match_row is None:
+            unmatched += 1
+            continue
+
+        home_wp, draw_wp, away_wp = compute_no_vig_probabilities(
+            row_dict["AvgH"], row_dict["AvgD"], row_dict["AvgA"]
+        )
+        over_wp, _ = compute_no_vig_two_way(row_dict["Avg>2.5"], row_dict["Avg<2.5"])
+        conn.execute(
+            """UPDATE matches
+               SET market_home_wp = ?, market_draw_wp = ?, market_away_wp = ?, market_over25_wp = ?
+               WHERE match_id = ?""",
+            (home_wp, draw_wp, away_wp, over_wp, match_row[0]),
+        )
+        matched += 1
+    conn.commit()
+    return matched, unmatched

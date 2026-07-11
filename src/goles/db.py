@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS matches (
     away_goals INTEGER NOT NULL DEFAULT 0,
     home_elo_wp REAL,
     away_elo_wp REAL,
-    draw_elo_wp REAL
+    draw_elo_wp REAL,
+    market_home_wp REAL,
+    market_draw_wp REAL,
+    market_away_wp REAL,
+    market_over25_wp REAL
 );
 
 CREATE TABLE IF NOT EXISTS shots (
