@@ -191,3 +191,25 @@ def test_load_match_shots_carries_enrichment_fields():
     assert shots[0]["situation"] == "OpenPlay"
     assert shots[0]["shot_type"] == "Head"
     assert shots[0]["last_action"] == "Cross"
+
+
+def test_load_match_cards_returns_red_card_events():
+    from goles.backtest import load_match_cards
+
+    conn = get_connection(":memory:")
+    init_db(conn)
+    persist_shots(conn, [
+        {
+            "match_id": 701, "league": "TEST", "season": "2526", "date": "2025-08-01",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 10, "team": "home", "xg": 0.1, "is_goal": False,
+        },
+    ])
+    match_id, home_id, away_id = conn.execute(
+        "SELECT match_id, home_team_id, away_team_id FROM matches"
+    ).fetchone()
+    conn.execute("INSERT INTO cards (match_id, team_id, minute) VALUES (?, ?, ?)", (match_id, away_id, 55))
+    conn.commit()
+
+    cards = load_match_cards(conn, match_id, home_id, away_id)
+    assert cards == [{"team": "away", "minute": 55}]

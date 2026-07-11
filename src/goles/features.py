@@ -61,7 +61,9 @@ def goal_in_window(shots: list[dict], cutoff_minute: int, horizon: int, team: st
     )
 
 
-def compute_ml_features(shots: list[dict], cutoff_minute: int, team: str) -> dict[str, float]:
+def compute_ml_features(
+    shots: list[dict], cutoff_minute: int, team: str, cards: list[dict] | None = None
+) -> dict[str, float]:
     """Computes an engineered feature set for predicting whether `team`
     ("home" or "away") scores in the next 15 minutes, from `team`'s own
     perspective (own_* vs opp_*), using only shots with minute <=
@@ -135,6 +137,10 @@ def compute_ml_features(shots: list[dict], cutoff_minute: int, team: str) -> dic
     own_linebreak_shots = float(sum(1 for s in own_shots if s.get("last_action") in LINEBREAK_ACTIONS))
     own_transition_shots = float(sum(1 for s in own_shots if s.get("last_action") in TRANSITION_ACTIONS))
 
+    cards = cards or []
+    own_red_cards = float(sum(1 for c in cards if c["team"] == team and c["minute"] <= cutoff_minute))
+    opp_red_cards = float(sum(1 for c in cards if c["team"] == opponent and c["minute"] <= cutoff_minute))
+
     return {
         "is_home": 1.0 if team == "home" else 0.0,
         "minute": float(cutoff_minute),
@@ -162,4 +168,6 @@ def compute_ml_features(shots: list[dict], cutoff_minute: int, team: str) -> dic
         "opp_setpiece_xg": opp_setpiece_xg,
         "own_linebreak_shots": own_linebreak_shots,
         "own_transition_shots": own_transition_shots,
+        "own_red_cards": own_red_cards,
+        "opp_red_cards": opp_red_cards,
     }

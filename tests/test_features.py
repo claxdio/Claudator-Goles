@@ -146,3 +146,16 @@ def test_enrichment_features_default_to_zero_without_enriched_data():
     assert f["own_setpiece_xg"] == 0.0
     assert f["own_linebreak_shots"] == 0.0
     assert f["own_transition_shots"] == 0.0
+
+
+def test_compute_ml_features_counts_red_cards_before_cutoff():
+    cards = [{"team": "away", "minute": 55}, {"team": "home", "minute": 80}]
+    f = compute_ml_features(ML_SAMPLE_SHOTS, cutoff_minute=65, team="home", cards=cards)
+    assert f["opp_red_cards"] == 1.0  # the away card at minute 55 counts
+    assert f["own_red_cards"] == 0.0  # the home card at minute 80 is after the cutoff
+
+
+def test_compute_ml_features_defaults_red_cards_to_zero_without_cards_argument():
+    f = compute_ml_features(ML_SAMPLE_SHOTS, cutoff_minute=65, team="home")
+    assert f["own_red_cards"] == 0.0
+    assert f["opp_red_cards"] == 0.0

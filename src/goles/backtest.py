@@ -94,6 +94,20 @@ def load_match_shots(
     return shots
 
 
+def load_match_cards(
+    conn: sqlite3.Connection, match_id: int, home_team_id: int, away_team_id: int
+) -> list[dict]:
+    rows = conn.execute(
+        "SELECT team_id, minute FROM cards WHERE match_id = ? ORDER BY minute",
+        (match_id,),
+    ).fetchall()
+    cards = []
+    for team_id, minute in rows:
+        team = "home" if team_id == home_team_id else "away"
+        cards.append({"team": team, "minute": minute})
+    return cards
+
+
 def run_backtest(
     conn: sqlite3.Connection,
     team: str = "home",
