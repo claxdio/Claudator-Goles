@@ -46,3 +46,20 @@ Same ±0.002 band used in prior retrain comparisons: if variant B's BSS beats va
 ## Verification
 
 Manual run only (`python -m goles.experiment_closing_lines`), console output reviewed for both BSS numbers and coverage %. Findings get appended to this doc (a "## Resultado" section) once run, informing the subsequent decision on live-odds pipeline design — no separate implementation plan needed unless the result says closing lines should be formalized into production.
+
+## Resultado
+
+Ran `python -m goles.experiment_closing_lines` for real against the full local database (4,116 matches, 107,016 dataset rows).
+
+**Closing-odds coverage: 3,430/4,116 matches (83.3%)** — matches the expected ~5/6 of matches (every season except `1819`, which football-data.co.uk never published closing columns for), confirming the matching logic worked correctly, not silently degraded.
+
+**Sanity check:** variant A (pre-match average odds, i.e. today's production feature set) scored BSS 0.0337 in this run vs. the previously-recorded 0.0335 baseline — a 0.0002 difference, well within run-to-run noise (this script uses `build_dataset`'s default `blend=0.5` rather than `train_gbt.py`'s `POISSON_COMPARISON_BLEND=0.1`, which shifts the `poisson_prob` feature slightly; LightGBM's own training is otherwise deterministic). This confirms variant A is a faithful reproduction of production, so the A/B delta below is trustworthy.
+
+| Variant | BSS (test 2324) | `own_market_wp` importance (gain) |
+|---|---|---|
+| A — pre-match average odds (production) | **0.0337** | 27,145.8 |
+| B — closing-line odds | 0.0318 | 18,909.5 |
+
+**Delta (B − A): −0.0019** — inside the ±0.002 "flat" band. **No signal favoring closing-line freshness.** If anything, closing lines came in slightly worse, and `own_market_wp`'s feature importance dropped by ~30% in variant B — most plausibly explained by the coverage gap: 16.7% of matches have no closing-line data and fall back to the same `0.0` "missing market" default already used for genuinely missing data, diluting the signal for those rows. Pre-match average odds have no such gap (near-100% coverage per the earlier market-odds plan), so variant A gets clean signal on every row while variant B has real signal on ~83% of rows and a diluted default on the rest — a coverage handicap baked into this comparison, not evidence that closing prices are intrinsically weaker.
+
+**Implication for Phase 2's live-odds pipeline:** this result does **not** support prioritizing "freshest possible price" (i.e., building specifically toward closing-line-equivalent timing) over the simpler pre-match-average-style approach already validated in production. Practically, a live pipeline that fetches odds well before kickoff (Betfair Exchange delayed key, run from the VPS) is already directionally consistent with what worked here — there is no evidence from this experiment that engineering effort should go toward capturing odds as late as possible before kickoff. The lower coverage in this experiment is itself informative: any future closing-line attempt would need to explain/fix that gap before it could be considered a fair test — but there is no urgency to chase that, since the flat/negative result gives no efficiency argument for doing so. Recommendation: proceed with Phase 2's live-odds pipeline using whatever odds snapshot is operationally simplest to fetch reliably (not necessarily the closing line specifically), and revisit only if a future need arises.
