@@ -1,12 +1,12 @@
-# Market Odds + Rest-Days Features Implementation Plan
+# Market Odds + Rest-Days + Red-Card Features Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add two data categories research identified as high-value/low-effort and *orthogonal* to what we already capture: pre-match market-implied probabilities (from football-data.co.uk odds, already free and already identified as a source in Phase 1 but never actually ingested) and fixture-rest-days (100% derivable from data already in the database, zero new collection). Retrain and honestly compare against the current baseline (BSS 0.0190 / 0.0160 post-enrichment).
+**Goal:** Add three data categories identified as high-value/low-effort and *orthogonal* to what we already capture: pre-match market-implied probabilities (from football-data.co.uk odds, already free and already identified as a source in Phase 1 but never actually ingested), fixture-rest-days (100% derivable from data already in the database, zero new collection), and minute-stamped red cards (also zero new collection — found inside the raw Understat cache we already have on disk, see below). Retrain and honestly compare against the current baseline (BSS 0.0190 / 0.0160 post-enrichment).
 
-**Why these two, not the ones we already tried:** the shot-detail enrichment plan (box entries, set-piece split) came back flat (Δ within noise) because xG already encodes shot-location/situation information — those features were redundant with what the model already had. Market odds and rest-days are different in kind: xG has zero information about betting markets or pre-match fatigue, so there's no redundancy mechanism working against them the way there was for shot detail.
+**Why these three, not the ones we already tried:** the shot-detail enrichment plan (box entries, set-piece split) came back flat (Δ within noise) because xG already encodes shot-location/situation information — those features were redundant with what the model already had. Market odds, rest-days, and red cards are different in kind: xG has zero information about betting markets, pre-match fatigue, or a numerical-advantage shock, so there's no redundancy mechanism working against them the way there was for shot detail. Red cards specifically have the largest documented single-event effect size of anything considered in this project's research so far (~30% swing in the disadvantaged team's scoring rate) — bigger than weather or referee tendencies combined.
 
-**Architecture:** `soccerdata`'s `MatchHistory` reader is blocked by football-data.co.uk right now (verified: consistent 503 from its TLS-impersonating client across two seasons, while a plain `requests.get()` with a normal browser User-Agent gets 200 — same class of issue as Understat's occasional blocks, different specific cause). So this plan fetches the CSVs directly with `requests`, bypassing `soccerdata` for this one source. Team names differ between football-data.co.uk and our Understat-sourced `teams` table (e.g. "Man City" vs "Manchester City", "Dortmund" vs "Borussia Dortmund") — resolved with a hardcoded alias table built by empirically diffing the two real team-name lists across all 6 seasons/2 leagues we track (not guessed), so coverage is known and complete, not approximate. Rest-days reuses `priors.py`'s existing `team_matches_chronological` (no new query logic).
+**Architecture:** `soccerdata`'s `MatchHistory` reader is blocked by football-data.co.uk right now (verified: consistent 503 from its TLS-impersonating client across two seasons, while a plain `requests.get()` with a normal browser User-Agent gets 200 — same class of issue as Understat's occasional blocks, different specific cause). So this plan fetches the CSVs directly with `requests`, bypassing `soccerdata` for this one source. Team names differ between football-data.co.uk and our Understat-sourced `teams` table (e.g. "Man City" vs "Manchester City", "Dortmund" vs "Borussia Dortmund") — resolved with a hardcoded alias table built by empirically diffing the two real team-name lists across all 6 seasons/2 leagues we track (not guessed), so coverage is known and complete, not approximate. Rest-days reuses `priors.py`'s existing `team_matches_chronological` (no new query logic). Red cards were found empirically inside the raw Understat cache JSON's `rosters` section (not the `shots` section already mined by the enrichment plan): each player entry has `red_card` ("0"/"1") and `time` (minutes played), and for a sent-off player `time` is verified (against real matches, e.g. a Nastasic red card with `time: "65"`) to be the dismissal minute — this is minute-level in-play data, zero new network calls, sourced entirely from cache already on disk.
 
 **Tech Stack:** Unchanged — Python 3.11+, `requests`, `pandas`, `sqlite3`, `pytest`. No new dependencies (deliberately NOT using `soccerdata.MatchHistory`, which is blocked here).
 
@@ -19,8 +19,10 @@
 - Date format conversion required: football-data.co.uk uses `DD/MM/YYYY`; our `matches.date` is `YYYY-MM-DD` (ISO, from Understat's game string). Convert explicitly, don't string-compare across formats.
 - No-vig (de-margined) probability, not raw inverse-odds: raw `1/odds` values sum to >1 (the bookmaker's overround/margin) — normalize by dividing each by the sum so the three outcomes (or two, for over/under) sum to exactly 1.0.
 - Rest-days feature reuses `goles.priors.team_matches_chronological` — do not write a second query for the same data.
-- Feature-count discipline: exactly 6 new features (`own_rest_days`, `opp_rest_days`, `own_market_wp`, `opp_market_wp`, `market_draw_wp`, `market_over25_wp`), bringing `FEATURE_NAMES` from 28 → 34.
-- Temporal discipline unchanged: market odds are *pre-match* closing lines (fixed before kickoff, same information-timing as `trailing_prior_xg`/ClubElo would be) — using them as a feature is not look-ahead, since a live system would have this same closing-line information available before/at kickoff. Test-season rows still never touch training or calibration.
+- **Red cards only (not yellow)** — yellow cards have a much weaker/noisier documented relationship to goal-timing and are out of scope here; keep the feature set focused on the one shock event with real evidence behind it. Only the *first* red card per team per match matters for the "numerical disadvantage" signal a second red card doesn't add new information beyond "still down a player."
+- Red-card extraction reads the `rosters` section of the same raw cache files (`match_*.json`) the enrichment plan's `load_shot_details_from_cache` already reads the `shots` section of — same file, same resilience discipline (skip missing/malformed files, never raise), same `cache_dir` resolution via `soccerdata._config.DATA_DIR`.
+- Feature-count discipline: exactly 8 new features total this plan — 6 in Tasks 1-4 (`own_rest_days`, `opp_rest_days`, `own_market_wp`, `opp_market_wp`, `market_draw_wp`, `market_over25_wp`) plus 2 in Tasks 5-7 (`own_red_cards`, `opp_red_cards`), bringing `FEATURE_NAMES` from 28 → 36.
+- Temporal discipline unchanged: market odds are *pre-match* closing lines (fixed before kickoff, same information-timing as `trailing_prior_xg`/ClubElo would be) — using them as a feature is not look-ahead, since a live system would have this same closing-line information available before/at kickoff. Red-card counts are computed with the same `minute <= cutoff_minute` discipline as shots — a card at minute 70 must never affect a cutoff-60 prediction. Test-season rows still never touch training or calibration.
 - All 67 existing tests must keep passing unmodified.
 
 ---
@@ -540,15 +542,398 @@ git commit -m "feat: add days-since-last-match rest prior"
 
 ---
 
-### Task 5: Wire 6 new features into the dataset, retrain, report
+### Task 5: Raw-cache red-card extraction + `cards` table + persistence
 
 **Files:**
-- Modify: `src/goles/dataset.py` (`build_dataset` computes and attaches the 6 new features; `FEATURE_NAMES` 28 → 34)
+- Modify: `src/goles/db.py` (add a `cards` table)
+- Modify: `src/goles/loaders/understat.py` (new `load_red_cards_from_cache`, `persist_red_cards`)
+- Test: `tests/test_understat_loader.py` (append)
+
+**Interfaces:**
+- Produces: `load_red_cards_from_cache(cache_dir: Path) -> dict[int, list[dict]]` (game_id → list of `{"team_h_a": "h"/"a", "minute": int}`), `persist_red_cards(conn, red_cards_by_game_id: dict[int, list[dict]]) -> tuple[int, int]` (returns `(matches_processed, matches_not_found)`).
+- Consumes: raw cache JSON's `rosters` section, verified shape: `{"rosters": {"h": {"<player_id>": {"time": "65", "red_card": "1", ...}, ...}, "a": {...}}}`.
+
+`src/goles/loaders/understat.py` already has `import json` and `from pathlib import Path` from the earlier enrichment plan's `load_shot_details_from_cache` — do not re-add them, just add the two new functions below it.
+
+- [ ] **Step 1: Add the `cards` table**
+
+In `src/goles/db.py`, add to `SCHEMA` (after the `elo_ratings` table definition):
+```sql
+CREATE TABLE IF NOT EXISTS cards (
+    card_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL REFERENCES matches(match_id),
+    team_id INTEGER NOT NULL REFERENCES teams(team_id),
+    minute INTEGER NOT NULL
+);
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Append to `tests/test_understat_loader.py`:
+```python
+def test_load_red_cards_from_cache_reads_rosters(tmp_path):
+    import json
+
+    (tmp_path / "match_501.json").write_text(
+        json.dumps(
+            {
+                "rosters": {
+                    "h": {
+                        "1": {"player": "Player A", "time": "65", "red_card": "1"},
+                        "2": {"player": "Player B", "time": "90", "red_card": "0"},
+                    },
+                    "a": {
+                        "3": {"player": "Player C", "time": "78", "red_card": "1"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert red_cards[501] == [
+        {"team_h_a": "h", "minute": 65},
+        {"team_h_a": "a", "minute": 78},
+    ]
+
+
+def test_load_red_cards_from_cache_skips_matches_with_no_red_cards(tmp_path):
+    import json
+
+    (tmp_path / "match_502.json").write_text(
+        json.dumps({"rosters": {"h": {"1": {"player": "Player A", "time": "90", "red_card": "0"}}, "a": {}}}),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert 502 not in red_cards
+
+
+def test_persist_red_cards_matches_by_understat_id_and_side():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Team A")
+    away_id = get_or_create_team(conn, "Team B")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (501, 'TEST', '2324', '2023-08-11', ?, ?)""",
+        (home_id, away_id),
+    )
+    conn.commit()
+
+    red_cards_by_game_id = {501: [{"team_h_a": "h", "minute": 65}, {"team_h_a": "a", "minute": 78}]}
+    processed, not_found = persist_red_cards(conn, red_cards_by_game_id)
+
+    assert processed == 1
+    assert not_found == 0
+    rows = conn.execute("SELECT team_id, minute FROM cards ORDER BY minute").fetchall()
+    assert rows == [(home_id, 65), (away_id, 78)]
+
+
+def test_persist_red_cards_counts_unmatched_game_ids():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    red_cards_by_game_id = {999: [{"team_h_a": "h", "minute": 30}]}
+    processed, not_found = persist_red_cards(conn, red_cards_by_game_id)
+    assert processed == 0
+    assert not_found == 1
+
+
+def test_persist_red_cards_is_idempotent():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Team A")
+    away_id = get_or_create_team(conn, "Team B")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (501, 'TEST', '2324', '2023-08-11', ?, ?)""",
+        (home_id, away_id),
+    )
+    conn.commit()
+    red_cards_by_game_id = {501: [{"team_h_a": "h", "minute": 65}]}
+    persist_red_cards(conn, red_cards_by_game_id)
+    persist_red_cards(conn, red_cards_by_game_id)  # second call: no-op for this match
+
+    count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+    assert count == 1
+```
+
+Add `load_red_cards_from_cache, persist_red_cards` to the existing `from goles.loaders.understat import ...` line at the top of the file.
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `.venv\Scripts\pytest.exe tests/test_understat_loader.py -v -k "red_cards"`
+Expected: FAIL with `ImportError`
+
+- [ ] **Step 4: Write the implementation**
+
+Append to `src/goles/loaders/understat.py`:
+```python
+def load_red_cards_from_cache(cache_dir: Path) -> dict[int, list[dict]]:
+    """Reads the raw cached Understat match JSONs and returns a mapping
+    match_id (game_id) -> list of {"team_h_a": "h"/"a", "minute": int} for
+    every red-carded player in that match, sourced from the `rosters`
+    section (NOT the `shots` section `load_shot_details_from_cache`
+    reads). A red-carded player's `time` field is verified (against real
+    matches) to be the minute they were dismissed.
+
+    Resilient to missing/malformed files (skipped, not raised) -- best
+    effort, like `load_shot_details_from_cache`. The match_id is taken
+    from the filename (match_{id}.json), the same reliable, always-present
+    naming convention the enrichment plan already verified for this cache."""
+    red_cards: dict[int, list[dict]] = {}
+    for match_file in Path(cache_dir).glob("match_*.json"):
+        try:
+            with open(match_file, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rosters = data.get("rosters", {})
+        if not isinstance(rosters, dict):
+            continue
+        try:
+            match_id = int(match_file.stem.split("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+
+        events = []
+        for side in ("h", "a"):
+            for player in rosters.get(side, {}).values():
+                if player.get("red_card") != "1":
+                    continue
+                try:
+                    minute = int(player["time"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                events.append({"team_h_a": side, "minute": minute})
+        if events:
+            red_cards[match_id] = events
+    return red_cards
+
+
+def persist_red_cards(
+    conn: sqlite3.Connection, red_cards_by_game_id: dict[int, list[dict]]
+) -> tuple[int, int]:
+    """Persists red-card events into the `cards` table, matching each
+    game_id to its internal match_id via `matches.understat_id` and each
+    team_h_a to home_team_id/away_team_id. Skips (as a no-op, not an
+    error) any match that already has rows in `cards`, so repeated calls
+    are safe. Returns (matches_processed, matches_not_found)."""
+    processed = 0
+    not_found = 0
+    for game_id, events in red_cards_by_game_id.items():
+        row = conn.execute(
+            "SELECT match_id, home_team_id, away_team_id FROM matches WHERE understat_id = ?",
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            not_found += 1
+            continue
+        match_id, home_id, away_id = row
+
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM cards WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
+        if existing > 0:
+            continue
+
+        for event in events:
+            team_id = home_id if event["team_h_a"] == "h" else away_id
+            conn.execute(
+                "INSERT INTO cards (match_id, team_id, minute) VALUES (?, ?, ?)",
+                (match_id, team_id, event["minute"]),
+            )
+        processed += 1
+    conn.commit()
+    return processed, not_found
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `.venv\Scripts\pytest.exe tests/test_understat_loader.py -v`
+Expected: all pass (existing + 5 new)
+
+- [ ] **Step 6: Run the full suite, then commit**
+
+Run: `.venv\Scripts\pytest.exe -q` → expected 78 passed (67 + 6 from Tasks 1-2 + 5 here, matching whatever count Tasks 1-4 landed on plus 5).
+
+```powershell
+git add src/goles/db.py src/goles/loaders/understat.py tests/test_understat_loader.py
+git commit -m "feat: extract minute-stamped red cards from the raw Understat cache"
+```
+
+---
+
+### Task 6: Ingest red cards (manual verification)
+
+**Files:**
+- Create: `src/goles/ingest_cards.py`
+
+No automated tests (I/O-free but still an operational script, same precedent as `ingest_odds.py` — note this one makes ZERO network calls, it only reads the already-downloaded local cache).
+
+- [ ] **Step 1: Write the script**
+
+`src/goles/ingest_cards.py`:
+```python
+from __future__ import annotations
+
+from soccerdata._config import DATA_DIR
+
+from goles.db import get_connection, init_db
+from goles.loaders.understat import load_red_cards_from_cache, persist_red_cards
+
+
+def main() -> None:
+    conn = get_connection()
+    init_db(conn)
+
+    cache_dir = DATA_DIR / "Understat"
+    print(f"Leyendo tarjetas rojas del cache crudo en {cache_dir}...")
+    red_cards_by_game_id = load_red_cards_from_cache(cache_dir)
+    total_cards = sum(len(events) for events in red_cards_by_game_id.values())
+    print(f"{len(red_cards_by_game_id)} partidos con al menos una tarjeta roja ({total_cards} tarjetas en total).")
+
+    processed, not_found = persist_red_cards(conn, red_cards_by_game_id)
+    print(f"Procesados: {processed}. Partidos no encontrados en la base: {not_found}.")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 2: Run it for real**
+
+Run (PowerShell, venv activated): `python -m goles.ingest_cards`
+
+Expected: instant (no network, reads local cache only). `not_found` should be 0 (every game_id in the cache corresponds to a match already in the database, since the cache IS how the database was populated). Sanity-check the total: red cards are rare (roughly 1 per 30-40 matches in top-flight football), so expect on the order of 100-150 matches with at least one red card out of 4,116.
+
+- [ ] **Step 3: Commit**
+
+```powershell
+git add src/goles/ingest_cards.py
+git commit -m "feat: add red-card ingestion script from the local raw cache"
+```
+
+---
+
+### Task 7: `load_match_cards` + red-card features in `compute_ml_features`
+
+**Files:**
+- Modify: `src/goles/backtest.py` (add `load_match_cards`)
+- Modify: `src/goles/features.py` (`compute_ml_features` gains an optional `cards` parameter and 2 new keys)
+- Test: `tests/test_backtest.py`, `tests/test_features.py` (append)
+
+**Interfaces:**
+- Produces: `load_match_cards(conn, match_id, home_team_id, away_team_id) -> list[dict]` (each `{"team": "home"/"away", "minute": int}`), `compute_ml_features(shots, cutoff_minute, team, cards: list[dict] | None = None) -> dict[str, float]` (gains `own_red_cards`, `opp_red_cards`; 28 keys total now).
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_backtest.py`:
+```python
+def test_load_match_cards_returns_red_card_events():
+    from goles.backtest import load_match_cards
+
+    conn = get_connection(":memory:")
+    init_db(conn)
+    persist_shots(conn, [
+        {
+            "match_id": 701, "league": "TEST", "season": "2526", "date": "2025-08-01",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 10, "team": "home", "xg": 0.1, "is_goal": False,
+        },
+    ])
+    match_id, home_id, away_id = conn.execute(
+        "SELECT match_id, home_team_id, away_team_id FROM matches"
+    ).fetchone()
+    conn.execute("INSERT INTO cards (match_id, team_id, minute) VALUES (?, ?, ?)", (match_id, away_id, 55))
+    conn.commit()
+
+    cards = load_match_cards(conn, match_id, home_id, away_id)
+    assert cards == [{"team": "away", "minute": 55}]
+```
+
+Append to `tests/test_features.py`:
+```python
+def test_compute_ml_features_counts_red_cards_before_cutoff():
+    cards = [{"team": "away", "minute": 55}, {"team": "home", "minute": 80}]
+    f = compute_ml_features(ML_SAMPLE_SHOTS, cutoff_minute=65, team="home", cards=cards)
+    assert f["opp_red_cards"] == 1.0  # the away card at minute 55 counts
+    assert f["own_red_cards"] == 0.0  # the home card at minute 80 is after the cutoff
+
+
+def test_compute_ml_features_defaults_red_cards_to_zero_without_cards_argument():
+    f = compute_ml_features(ML_SAMPLE_SHOTS, cutoff_minute=65, team="home")
+    assert f["own_red_cards"] == 0.0
+    assert f["opp_red_cards"] == 0.0
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `.venv\Scripts\pytest.exe tests/test_backtest.py tests/test_features.py -v -k "cards or red_card"`
+Expected: FAIL — `load_match_cards` not found / `TypeError: compute_ml_features() got an unexpected keyword argument 'cards'`
+
+- [ ] **Step 3: Implement**
+
+In `src/goles/backtest.py`, add after `load_match_shots`:
+```python
+def load_match_cards(
+    conn: sqlite3.Connection, match_id: int, home_team_id: int, away_team_id: int
+) -> list[dict]:
+    rows = conn.execute(
+        "SELECT team_id, minute FROM cards WHERE match_id = ? ORDER BY minute",
+        (match_id,),
+    ).fetchall()
+    cards = []
+    for team_id, minute in rows:
+        team = "home" if team_id == home_team_id else "away"
+        cards.append({"team": team, "minute": minute})
+    return cards
+```
+
+In `src/goles/features.py`, change `compute_ml_features`'s signature to:
+```python
+def compute_ml_features(
+    shots: list[dict], cutoff_minute: int, team: str, cards: list[dict] | None = None
+) -> dict[str, float]:
+```
+add this near the end of the function body, before the `return` statement:
+```python
+    cards = cards or []
+    own_red_cards = float(sum(1 for c in cards if c["team"] == team and c["minute"] <= cutoff_minute))
+    opp_red_cards = float(sum(1 for c in cards if c["team"] == opponent and c["minute"] <= cutoff_minute))
+```
+and add to the returned dict:
+```python
+        "own_red_cards": own_red_cards,
+        "opp_red_cards": opp_red_cards,
+```
+
+- [ ] **Step 4: Run the full suite**
+
+Run: `.venv\Scripts\pytest.exe -q`
+Expected: all pass (prior count + 3 new)
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add src/goles/backtest.py src/goles/features.py tests/test_backtest.py tests/test_features.py
+git commit -m "feat: add minute-aware red-card features to compute_ml_features"
+```
+
+---
+
+### Task 8: Wire all 8 new features into the dataset, retrain, report
+
+**Files:**
+- Modify: `src/goles/dataset.py` (`build_dataset` computes and attaches all 8 new features; `FEATURE_NAMES` 28 → 36)
 - Test: `tests/test_dataset.py` (append)
 
 **Interfaces:**
-- Consumes: `goles.priors.days_since_last_match` (Task 4), the 4 `market_*_wp` columns on `matches` (Task 2/3).
-- Produces: `FEATURE_NAMES` gains `own_rest_days`, `opp_rest_days`, `own_market_wp`, `opp_market_wp`, `market_draw_wp`, `market_over25_wp` (34 total).
+- Consumes: `goles.priors.days_since_last_match` (Task 4), the 4 `market_*_wp` columns on `matches` (Task 2/3), `goles.backtest.load_match_cards` (Task 7).
+- Produces: `FEATURE_NAMES` gains `own_rest_days`, `opp_rest_days`, `own_market_wp`, `opp_market_wp`, `market_draw_wp`, `market_over25_wp`, `own_red_cards`, `opp_red_cards` (36 total).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -577,6 +962,9 @@ def test_build_dataset_includes_market_and_rest_features(tmp_path):
     assert row_a_home.features["market_over25_wp"] == 0.55
     # Team A's first match of the season -> no prior fixture -> defaulted, not crashed
     assert row_a_home.features["own_rest_days"] == 7.0
+    # no cards seeded for this match -> both default to 0
+    assert row_a_home.features["own_red_cards"] == 0.0
+    assert row_a_home.features["opp_red_cards"] == 0.0
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -588,9 +976,9 @@ Expected: FAIL with `KeyError: 'own_rest_days'`
 
 In `src/goles/dataset.py`:
 
-(a) Add to `FEATURE_NAMES` (before `"trailing_prior_xg"`): `"own_rest_days", "opp_rest_days", "own_market_wp", "opp_market_wp", "market_draw_wp", "market_over25_wp",`.
+(a) Add to `FEATURE_NAMES` (before `"trailing_prior_xg"`): `"own_rest_days", "opp_rest_days", "own_market_wp", "opp_market_wp", "market_draw_wp", "market_over25_wp", "own_red_cards", "opp_red_cards",`.
 
-(b) Add `from goles.priors import days_since_last_match, trailing_xg_per90` (extend the existing priors import).
+(b) Add `from goles.priors import days_since_last_match, trailing_xg_per90` (extend the existing priors import) and add `load_match_cards` to the existing `from goles.backtest import (...)` block.
 
 (c) Inside `build_dataset`'s match loop, change the matches query to also select the 4 market columns:
 ```python
@@ -602,14 +990,21 @@ In `src/goles/dataset.py`:
 ```
 and unpack the extra 4 values in the `for` loop header (`for match_id, home_team_id, away_team_id, league, season, market_home_wp, market_draw_wp, market_away_wp, market_over25_wp in matches:`).
 
-(d) Inside the `for team, team_id in (("home", home_team_id), ("away", away_team_id)):` loop, right after computing `prior`, add:
+(d) Still inside the per-match loop but before the `for team, team_id in (...)` loop (i.e. computed once per match, like `shots`), add:
+```python
+        cards = load_match_cards(conn, match_id, home_team_id, away_team_id)
+```
+
+(e) Inside the `for team, team_id in (("home", home_team_id), ("away", away_team_id)):` loop, right after computing `prior`, add:
 ```python
                 rest_days = days_since_last_match(conn, team_id, league, season, match_id)
                 rest_days = rest_days if rest_days is not None else 7.0  # default: typical off-season/international-break gap
                 own_market_wp = market_home_wp if team == "home" else market_away_wp
 ```
 
-(e) Extend the `full_features` dict assembly with:
+(f) Change the existing `ml_features = compute_ml_features(shots, cutoff, team)` call to pass cards through: `ml_features = compute_ml_features(shots, cutoff, team, cards=cards)`.
+
+(g) Extend the `full_features` dict assembly with:
 ```python
                 full_features["own_rest_days"] = rest_days
                 full_features["opp_rest_days"] = (
@@ -621,7 +1016,7 @@ and unpack the extra 4 values in the `for` loop header (`for match_id, home_team
                 full_features["market_over25_wp"] = market_over25_wp if market_over25_wp is not None else 0.0
 ```
 
-Note the missing-market default is `0.0`, not a "neutral" value like 0.33 — this is intentional: it lets the tree distinguish "no market data available" (all three wp features simultaneously near 0, an unusual joint pattern) from a genuine long-shot (~0.0 alone on one side with the other two summing near 1.0). Document this reasoning as a code comment.
+Note the missing-market default is `0.0`, not a "neutral" value like 0.33 — this is intentional: it lets the tree distinguish "no market data available" (all three wp features simultaneously near 0, an unusual joint pattern) from a genuine long-shot (~0.0 alone on one side with the other two summing near 1.0). Document this reasoning as a code comment. (`own_red_cards`/`opp_red_cards` need no explicit assembly here — they already come back inside `ml_features`/`full_features` from `compute_ml_features` itself, per Task 7.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -631,13 +1026,13 @@ Expected: all pass
 - [ ] **Step 5: Run the full suite**
 
 Run: `.venv\Scripts\pytest.exe -q`
-Expected: 79 passed
+Expected: all pass, no regressions
 
 - [ ] **Step 6: Commit the code**
 
 ```powershell
 git add src/goles/dataset.py tests/test_dataset.py
-git commit -m "feat: wire market-odds and rest-days features into the training dataset"
+git commit -m "feat: wire market-odds, rest-days and red-card features into the training dataset"
 ```
 
 - [ ] **Step 7: Retrain and compare (manual verification)**
@@ -648,9 +1043,9 @@ python -m goles.train_gbt
 python -m goles.train_gbt_replication
 ```
 
-Baseline to beat (post shot-enrichment, recorded in the enrichment plan): **BSS 0.0190** (test 2324), **BSS 0.0160** (réplica test 2223). Apply the same decision rule as the prior plan: improvement beyond ±0.002 in the SAME direction on both runs is a real signal; flat means keep-but-don't-celebrate; a meaningful regression on both runs means revert Task 5's `FEATURE_NAMES` additions (keep Tasks 1-4's data plumbing regardless — market odds and rest-days are useful to have stored even if this particular featurization doesn't help).
+Baseline to beat (post shot-enrichment, recorded in the enrichment plan): **BSS 0.0190** (test 2324), **BSS 0.0160** (réplica test 2223). Apply the same decision rule as the prior plan: improvement beyond ±0.002 in the SAME direction on both runs is a real signal; flat means keep-but-don't-celebrate; a meaningful regression on both runs means revert this task's `FEATURE_NAMES` additions (keep Tasks 1-7's data plumbing regardless — market odds, rest-days, and red cards are useful to have stored even if a particular featurization doesn't help).
 
-Check feature importance specifically for `own_market_wp`/`market_draw_wp`/`market_over25_wp` — given these encode information no other feature has (private market information), a near-zero importance here would be a genuine surprise worth double-checking (e.g. confirm the odds ingestion coverage was actually high in Task 3, not silently mostly-zero-filled).
+Check feature importance specifically for `own_market_wp`/`market_draw_wp`/`market_over25_wp` (near-zero would be a surprise given they encode information no other feature has — double-check odds ingestion coverage from Task 3 wasn't silently low) and for `opp_red_cards` (per the research behind this plan, this one has the single largest documented individual effect size of anything added in this plan — a near-zero importance here is the most surprising possible outcome and worth a specific sanity check: query `SELECT COUNT(*) FROM cards` and cross-check against Task 6's "matches with a red card" printout before concluding the feature is genuinely unhelpful rather than under-populated).
 
 - [ ] **Step 8: Record the result and commit**
 
@@ -658,9 +1053,9 @@ Append a "## Resultado" section to this plan file with the real numbers and feat
 
 ```powershell
 git add docs/superpowers/plans/2026-07-11-goal-predictor-market-rest-features.md
-git commit -m "docs: record market-odds and rest-days retrain results"
+git commit -m "docs: record market-odds, rest-days and red-card retrain results"
 ```
 
 ## Próximos pasos (fuera de alcance de este plan)
 
-Remaining from the GBT plan's backlog: bootstrap confidence interval (optional hardening), ClubElo wiring (now lower priority given market odds cover similar ground — pre-match team-strength signal — with less engineering risk, since we already solved the team-name-matching problem here and could reuse the same alias-table pattern for ClubElo later if still wanted). Model persistence already exists (`src/goles/persistence.py`) — if this plan's features improve the model, the persisted model must be regenerated from the new training run before Phase 2 uses it.
+Remaining from the GBT plan's backlog: bootstrap confidence interval (optional hardening), ClubElo wiring (now lower priority given market odds cover similar ground — pre-match team-strength signal — with less engineering risk, since we already solved the team-name-matching problem here and could reuse the same alias-table pattern for ClubElo later if still wanted). Model persistence already exists (`src/goles/persistence.py`) — if this plan's features improve the model, the persisted model must be regenerated from the new training run before Phase 2 uses it. If red cards prove valuable, Phase 2's live pipeline needs a live source for card events with minute timestamps (Sofascore/FotMob both surface cards live, typically with minute — needs verification when Phase 2 is scoped) since Understat's raw cache obviously has no live equivalent.
