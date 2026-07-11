@@ -8,11 +8,12 @@ from goles.backtest import (
     DEFAULT_BLEND,
     HORIZON_MINUTES,
     RECENT_WINDOW_MINUTES,
+    load_match_cards,
     load_match_shots,
 )
 from goles.features import compute_ml_features, compute_state_at_minute, goal_in_window
 from goles.model import dynamic_lambda, prob_goal_in_window
-from goles.priors import trailing_xg_per90
+from goles.priors import days_since_last_match, trailing_xg_per90
 
 FEATURE_NAMES = [
     "is_home",
@@ -41,6 +42,14 @@ FEATURE_NAMES = [
     "opp_setpiece_xg",
     "own_linebreak_shots",
     "own_transition_shots",
+    "own_rest_days",
+    "opp_rest_days",
+    "own_market_wp",
+    "opp_market_wp",
+    "market_draw_wp",
+    "market_over25_wp",
+    "own_red_cards",
+    "opp_red_cards",
     "trailing_prior_xg",
     "poisson_prob",
 ]
@@ -67,17 +76,33 @@ def build_dataset(
     features, and the goal-in-next-15-minutes label."""
     rows: list[DatasetRow] = []
     matches = conn.execute(
-        "SELECT match_id, home_team_id, away_team_id, league, season FROM matches"
+        """SELECT match_id, home_team_id, away_team_id, league, season,
+                  market_home_wp, market_draw_wp, market_away_wp, market_over25_wp
+           FROM matches"""
     ).fetchall()
 
-    for match_id, home_team_id, away_team_id, league, season in matches:
+    for (
+        match_id,
+        home_team_id,
+        away_team_id,
+        league,
+        season,
+        market_home_wp,
+        market_draw_wp,
+        market_away_wp,
+        market_over25_wp,
+    ) in matches:
         shots = load_match_shots(conn, match_id, home_team_id, away_team_id)
         if not shots:
             continue
+        cards = load_match_cards(conn, match_id, home_team_id, away_team_id)
         for team, team_id in (("home", home_team_id), ("away", away_team_id)):
             prior = trailing_xg_per90(conn, team_id, league, season, match_id)
+            rest_days = days_since_last_match(conn, team_id, league, season, match_id)
+            rest_days = rest_days if rest_days is not None else 7.0  # default: typical off-season/international-break gap
+            own_market_wp = market_home_wp if team == "home" else market_away_wp
             for cutoff in cutoff_minutes:
-                ml_features = compute_ml_features(shots, cutoff, team)
+                ml_features = compute_ml_features(shots, cutoff, team, cards=cards)
 
                 state = compute_state_at_minute(shots, cutoff, window=RECENT_WINDOW_MINUTES)
                 recent_xg = state.home_xg_last15 if team == "home" else state.away_xg_last15
@@ -91,6 +116,24 @@ def build_dataset(
                 poisson_prob = prob_goal_in_window(lam)
 
                 full_features = dict(ml_features)
+                full_features["own_rest_days"] = rest_days
+                full_features["opp_rest_days"] = (
+                    days_since_last_match(conn, away_team_id if team == "home" else home_team_id, league, season, match_id)
+                    or 7.0
+                )
+                # Missing-market default is 0.0, not a "neutral" value like 0.33:
+                # this lets the tree distinguish "no market data available" (all
+                # three wp features simultaneously near 0, an unusual joint
+                # pattern) from a genuine long-shot (~0.0 alone on one side with
+                # the other two summing near 1.0).
+                full_features["own_market_wp"] = own_market_wp if own_market_wp is not None else 0.0
+                full_features["opp_market_wp"] = (
+                    (market_away_wp if team == "home" else market_home_wp)
+                    if (market_away_wp if team == "home" else market_home_wp) is not None
+                    else 0.0
+                )
+                full_features["market_draw_wp"] = market_draw_wp if market_draw_wp is not None else 0.0
+                full_features["market_over25_wp"] = market_over25_wp if market_over25_wp is not None else 0.0
                 full_features["trailing_prior_xg"] = prior
                 full_features["poisson_prob"] = poisson_prob
 
