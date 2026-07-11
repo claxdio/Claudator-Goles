@@ -102,6 +102,23 @@ def _to_iso_date(football_data_date: str) -> str:
     return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
 
 
+def _first_valid_value(row_dict: dict, column_names: list[str]) -> float | None:
+    """Returns the first non-null, non-NaN value found in row_dict across
+    the given column names, in order, or None if none of them have a
+    usable value. Used to fall back from football-data.co.uk's current
+    column names (AvgH, Avg>2.5, ...) to their older Betbrain-branded
+    equivalents (BbAvH, BbAv>2.5, ...) used in season 1819's CSVs, which
+    carry the exact same data under different column names."""
+    for column_name in column_names:
+        value = row_dict.get(column_name)
+        if value is None:
+            continue
+        if isinstance(value, float) and value != value:  # NaN check without importing math/pandas here
+            continue
+        return float(value)
+    return None
+
+
 def persist_odds(conn: sqlite3.Connection, odds_df: pd.DataFrame) -> tuple[int, int]:
     """Normalizes team names, converts dates, computes no-vig probabilities,
     and updates matching rows in `matches` (joined by league + season +
@@ -133,10 +150,17 @@ def persist_odds(conn: sqlite3.Connection, odds_df: pd.DataFrame) -> tuple[int, 
             unmatched += 1
             continue
 
-        home_wp, draw_wp, away_wp = compute_no_vig_probabilities(
-            row_dict["AvgH"], row_dict["AvgD"], row_dict["AvgA"]
-        )
-        over_wp, _ = compute_no_vig_two_way(row_dict["Avg>2.5"], row_dict["Avg<2.5"])
+        odds_home = _first_valid_value(row_dict, ["AvgH", "BbAvH"])
+        odds_draw = _first_valid_value(row_dict, ["AvgD", "BbAvD"])
+        odds_away = _first_valid_value(row_dict, ["AvgA", "BbAvA"])
+        odds_over = _first_valid_value(row_dict, ["Avg>2.5", "BbAv>2.5"])
+        odds_under = _first_valid_value(row_dict, ["Avg<2.5", "BbAv<2.5"])
+        if None in (odds_home, odds_draw, odds_away, odds_over, odds_under):
+            unmatched += 1
+            continue
+
+        home_wp, draw_wp, away_wp = compute_no_vig_probabilities(odds_home, odds_draw, odds_away)
+        over_wp, _ = compute_no_vig_two_way(odds_over, odds_under)
         conn.execute(
             """UPDATE matches
                SET market_home_wp = ?, market_draw_wp = ?, market_away_wp = ?, market_over25_wp = ?

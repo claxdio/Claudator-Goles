@@ -119,3 +119,64 @@ def test_persist_odds_counts_unmatched_rows_without_raising():
     matched, unmatched = persist_odds(conn, odds_df)
     assert matched == 0
     assert unmatched == 1
+
+
+def test_persist_odds_falls_back_to_betbrain_column_names():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Manchester City")
+    away_id = get_or_create_team(conn, "Burnley")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (1, 'ENG-Premier League', '1819', '2018-08-11', ?, ?)""",
+        (away_id, home_id),
+    )
+    conn.commit()
+
+    odds_df = pd.DataFrame(
+        [
+            {
+                "Date": "11/08/2018", "HomeTeam": "Burnley", "AwayTeam": "Man City",
+                "AvgH": float("nan"), "AvgD": float("nan"), "AvgA": float("nan"),
+                "Avg>2.5": float("nan"), "Avg<2.5": float("nan"),
+                "BbAvH": 9.02, "BbAvD": 5.35, "BbAvA": 1.35,
+                "BbAv>2.5": 1.90, "BbAv<2.5": 1.95,
+                "understat_league": "ENG-Premier League", "understat_season": "1819",
+            },
+        ]
+    )
+    matched, unmatched = persist_odds(conn, odds_df)
+    assert matched == 1
+    assert unmatched == 0
+    row = conn.execute("SELECT market_home_wp FROM matches").fetchone()
+    assert row[0] is not None
+
+
+def test_persist_odds_counts_nan_odds_as_unmatched_even_when_match_found():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Manchester City")
+    away_id = get_or_create_team(conn, "Burnley")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (1, 'ENG-Premier League', '1819', '2018-08-11', ?, ?)""",
+        (away_id, home_id),
+    )
+    conn.commit()
+
+    odds_df = pd.DataFrame(
+        [
+            {
+                "Date": "11/08/2018", "HomeTeam": "Burnley", "AwayTeam": "Man City",
+                "AvgH": float("nan"), "AvgD": float("nan"), "AvgA": float("nan"),
+                "Avg>2.5": float("nan"), "Avg<2.5": float("nan"),
+                # no BbAv* fallback columns present at all in this row
+                "understat_league": "ENG-Premier League", "understat_season": "1819",
+            },
+        ]
+    )
+    matched, unmatched = persist_odds(conn, odds_df)
+    assert matched == 0
+    assert unmatched == 1
+    row = conn.execute("SELECT market_home_wp FROM matches").fetchone()
+    assert row[0] is None
