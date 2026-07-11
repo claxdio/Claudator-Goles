@@ -1,7 +1,7 @@
 import pytest
 
 from goles.db import get_connection, get_or_create_team, init_db
-from goles.priors import team_matches_chronological, trailing_xg_per90
+from goles.priors import team_matches_chronological, trailing_xg_per90, days_since_last_match
 
 
 def _insert_match(conn, understat_id, league, season, date, home_id, away_id):
@@ -85,3 +85,29 @@ def test_trailing_xg_per90_raises_for_unknown_match():
 
     with pytest.raises(ValueError):
         trailing_xg_per90(conn, arsenal, "ENG-Premier League", "2324", before_match_id=999)
+
+
+def test_days_since_last_match_computes_the_gap():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    arsenal = get_or_create_team(conn, "Arsenal")
+    chelsea = get_or_create_team(conn, "Chelsea")
+    fulham = get_or_create_team(conn, "Fulham")
+
+    m1 = _insert_match(conn, 1, "ENG-Premier League", "2324", "2023-08-11", arsenal, chelsea)
+    m2 = _insert_match(conn, 2, "ENG-Premier League", "2324", "2023-08-19", arsenal, fulham)
+    conn.commit()
+
+    gap = days_since_last_match(conn, arsenal, "ENG-Premier League", "2324", m2)
+    assert gap == 8.0
+
+
+def test_days_since_last_match_returns_none_for_first_match_of_season():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    arsenal = get_or_create_team(conn, "Arsenal")
+    chelsea = get_or_create_team(conn, "Chelsea")
+    m1 = _insert_match(conn, 1, "ENG-Premier League", "2324", "2023-08-11", arsenal, chelsea)
+    conn.commit()
+
+    assert days_since_last_match(conn, arsenal, "ENG-Premier League", "2324", m1) is None

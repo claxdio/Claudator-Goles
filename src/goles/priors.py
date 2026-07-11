@@ -58,3 +58,33 @@ def trailing_xg_per90(
         return 0.0
     total_xg = sum(team_match_xg(conn, mid, team_id) for mid in prior_match_ids)
     return total_xg / len(prior_match_ids)
+
+
+def days_since_last_match(
+    conn: sqlite3.Connection,
+    team_id: int,
+    league: str,
+    season: str,
+    before_match_id: int,
+) -> float | None:
+    """Days between `team_id`'s previous match in (league, season) and the
+    match identified by `before_match_id`. Returns None for a team's first
+    match of the season (no prior fixture to measure a gap from) -- callers
+    should treat None as "no rest-day signal available", not zero."""
+    from datetime import date as _date
+
+    matches = team_matches_chronological(conn, team_id, league, season)
+    match_dates = {mid: date for mid, date in matches}
+    if before_match_id not in match_dates:
+        raise ValueError(
+            f"match_id={before_match_id} not found for team_id={team_id} "
+            f"in league={league!r} season={season!r}"
+        )
+    before_date = match_dates[before_match_id]
+    prior_dates = sorted(date for mid, date in matches if date < before_date)
+    if not prior_dates:
+        return None
+    last_date = prior_dates[-1]
+    d1 = _date.fromisoformat(last_date)
+    d2 = _date.fromisoformat(before_date)
+    return float((d2 - d1).days)
