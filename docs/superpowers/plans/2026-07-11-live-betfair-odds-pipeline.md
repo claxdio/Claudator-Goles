@@ -647,7 +647,7 @@ git commit -m "feat: add Betfair team-name alias table"
 
 `tests/test_betfair_poller.py`:
 ```python
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -746,10 +746,8 @@ def test_poll_once_persists_a_snapshot_for_a_valid_match_odds_market():
     conn = get_connection(":memory:")
     init_db(conn)
 
-    import goles.betfair.poller as poller_module
-    poller_module.list_market_book = Mock(return_value=[market_book])
-
-    poll_once(session, conn, market_catalogue)
+    with patch("goles.betfair.poller.list_market_book", return_value=[market_book]):
+        poll_once(session, conn, market_catalogue)
 
     row = conn.execute("SELECT home_team, away_team, market_type FROM odds_snapshots").fetchone()
     assert row == ("Arsenal", "Chelsea", "MATCH_ODDS")
@@ -776,10 +774,8 @@ def test_poll_once_skips_market_with_no_available_prices_without_raising():
     conn = get_connection(":memory:")
     init_db(conn)
 
-    import goles.betfair.poller as poller_module
-    poller_module.list_market_book = Mock(return_value=[market_book])
-
-    poll_once(session, conn, market_catalogue)  # must not raise
+    with patch("goles.betfair.poller.list_market_book", return_value=[market_book]):
+        poll_once(session, conn, market_catalogue)  # must not raise
 
     count = conn.execute("SELECT COUNT(*) FROM odds_snapshots").fetchone()[0]
     assert count == 0
