@@ -97,9 +97,12 @@ def build_dataset(
             continue
         cards = load_match_cards(conn, match_id, home_team_id, away_team_id)
         for team, team_id in (("home", home_team_id), ("away", away_team_id)):
+            opp_team_id = away_team_id if team == "home" else home_team_id
             prior = trailing_xg_per90(conn, team_id, league, season, match_id)
             rest_days = days_since_last_match(conn, team_id, league, season, match_id)
             rest_days = rest_days if rest_days is not None else 7.0  # default: typical off-season/international-break gap
+            opp_rest_days = days_since_last_match(conn, opp_team_id, league, season, match_id)
+            opp_rest_days = opp_rest_days if opp_rest_days is not None else 7.0  # default: typical off-season/international-break gap
             own_market_wp = market_home_wp if team == "home" else market_away_wp
             for cutoff in cutoff_minutes:
                 ml_features = compute_ml_features(shots, cutoff, team, cards=cards)
@@ -117,10 +120,7 @@ def build_dataset(
 
                 full_features = dict(ml_features)
                 full_features["own_rest_days"] = rest_days
-                full_features["opp_rest_days"] = (
-                    days_since_last_match(conn, away_team_id if team == "home" else home_team_id, league, season, match_id)
-                    or 7.0
-                )
+                full_features["opp_rest_days"] = opp_rest_days
                 # Missing-market default is 0.0, not a "neutral" value like 0.33:
                 # this lets the tree distinguish "no market data available" (all
                 # three wp features simultaneously near 0, an unusual joint

@@ -258,13 +258,83 @@ def persist_shots(conn: sqlite3.Connection, records: list[dict]) -> None:
     conn.commit()
 
 
+def _resolve_red_card_minute(player: dict, side_roster: dict) -> int | None:
+    """Returns the true match minute a red-carded player was dismissed, or
+    None if it cannot be reliably determined (caller should drop the event
+    rather than guess).
+
+    For a STARTER (`position != "Sub"`), `time` is verified (against real
+    matches) to already be minutes-played-in-the-match, which for a
+    red-carded player equals their dismissal minute -- returned directly.
+
+    For a SUBSTITUTE (`position == "Sub"`), `time` is instead minutes
+    played *after coming on* (a duration, not a match-clock minute), so it
+    must be added to the minute they were substituted on. That
+    substitution-on minute is NOT on the substitute's own roster entry --
+    it has to be recovered from the player they replaced: the substitute's
+    `roster_out` field holds that other player's roster `id` (within the
+    same side's roster dict), and that other player's own `time` field is
+    the minute of the substitution (verified empirically across 59
+    real substitute-red-card cases in the Understat cache, e.g. Understat
+    match_id 11973: Eddie Nketiah, `position: "Sub"`, `time: "4"`,
+    `roster_out: "406372"`, resolves via roster id 406372 = Alexandre
+    Lacazette, `time: "75"`, `roster_in: "406377"` pointing back to
+    Nketiah's own roster id -- confirming the bidirectional link -- giving
+    a true dismissal minute of 75 + 4 = 79, not the raw 4).
+
+    If `roster_out` is missing/"0", the referenced roster entry can't be
+    found, or either `time` field is missing/unparseable, this returns
+    None so the event gets dropped instead of stored with a fabricated or
+    corrupted minute."""
+    if player.get("position") != "Sub":
+        try:
+            return int(player["time"])
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    roster_out_id = player.get("roster_out")
+    if not roster_out_id or roster_out_id == "0":
+        return None
+
+    # Roster dict keys are verified (empirically, across the whole cache)
+    # to equal each entry's own "id" field, so a direct key lookup works;
+    # fall back to a linear scan for resilience in case that ever isn't true.
+    out_entry = side_roster.get(roster_out_id)
+    if not isinstance(out_entry, dict) or out_entry.get("id") != roster_out_id:
+        out_entry = next(
+            (p for p in side_roster.values() if isinstance(p, dict) and p.get("id") == roster_out_id),
+            None,
+        )
+    if out_entry is None:
+        return None
+
+    try:
+        substitution_on_minute = int(out_entry["time"])
+        minutes_played_after_coming_on = int(player["time"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    return substitution_on_minute + minutes_played_after_coming_on
+
+
 def load_red_cards_from_cache(cache_dir: Path) -> dict[int, list[dict]]:
     """Reads the raw cached Understat match JSONs and returns a mapping
     match_id (game_id) -> list of {"team_h_a": "h"/"a", "minute": int} for
     every red-carded player in that match, sourced from the `rosters`
     section (NOT the `shots` section `load_shot_details_from_cache`
-    reads). A red-carded player's `time` field is verified (against real
-    matches) to be the minute they were dismissed.
+    reads).
+
+    The dismissal minute is computed by `_resolve_red_card_minute`: for
+    starters, the player's own `time` field already is the match minute of
+    dismissal. For substitutes, `time` is only minutes played *after*
+    coming on, so it is added to the substitution-on minute recovered from
+    the player they replaced via `roster_out` (see
+    `_resolve_red_card_minute`'s docstring for the full empirical
+    justification). If that reconstruction isn't possible for a given
+    substitute (missing/unresolvable `roster_out` linkage, or an
+    unparseable `time` field), the event is dropped entirely rather than
+    stored with a guessed or corrupted minute -- across the current cache
+    this fallback is never actually triggered (all substitute red cards
+    resolve cleanly), but it's kept as a safety net for future data.
 
     Resilient to missing/malformed files (skipped, not raised) -- best
     effort, like `load_shot_details_from_cache`. The match_id is taken
@@ -287,12 +357,14 @@ def load_red_cards_from_cache(cache_dir: Path) -> dict[int, list[dict]]:
 
         events = []
         for side in ("h", "a"):
-            for player in rosters.get(side, {}).values():
-                if player.get("red_card") != "1":
+            side_roster = rosters.get(side, {})
+            if not isinstance(side_roster, dict):
+                continue
+            for player in side_roster.values():
+                if not isinstance(player, dict) or player.get("red_card") != "1":
                     continue
-                try:
-                    minute = int(player["time"])
-                except (KeyError, ValueError, TypeError):
+                minute = _resolve_red_card_minute(player, side_roster)
+                if minute is None:
                     continue
                 events.append({"team_h_a": side, "minute": minute})
         if events:

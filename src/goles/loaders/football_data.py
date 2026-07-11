@@ -6,8 +6,6 @@ import sqlite3
 import pandas as pd
 import requests
 
-from goles.db import get_or_create_team
-
 LEAGUE_CODES = {
     "ENG-Premier League": "E0",
     "GER-Bundesliga": "D1",

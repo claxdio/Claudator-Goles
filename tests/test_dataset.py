@@ -80,7 +80,7 @@ def test_rows_to_arrays_matches_feature_order_and_label():
     assert set(y) <= {0, 1}
 
 
-def test_build_dataset_includes_market_and_rest_features(tmp_path):
+def test_build_dataset_includes_market_and_rest_features():
     conn = get_connection(":memory:")
     init_db(conn)
     _seed_multi_season_matches(conn)

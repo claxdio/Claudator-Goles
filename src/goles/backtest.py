@@ -103,7 +103,15 @@ def load_match_cards(
     ).fetchall()
     cards = []
     for team_id, minute in rows:
-        team = "home" if team_id == home_team_id else "away"
+        if team_id == home_team_id:
+            team = "home"
+        elif team_id == away_team_id:
+            team = "away"
+        else:
+            raise ValueError(
+                f"card row for match_id={match_id} has team_id={team_id}, which matches "
+                f"neither home_team_id={home_team_id} nor away_team_id={away_team_id}"
+            )
         cards.append({"team": team, "minute": minute})
     return cards
 

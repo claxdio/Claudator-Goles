@@ -412,6 +412,97 @@ def test_load_red_cards_from_cache_reads_rosters(tmp_path):
     ]
 
 
+def test_load_red_cards_from_cache_uses_time_directly_for_a_starter(tmp_path):
+    """Non-regression: a starter's `time` field already is the match minute
+    of dismissal, so it must be used as-is (no substitution reconstruction)."""
+    import json
+
+    (tmp_path / "match_601.json").write_text(
+        json.dumps(
+            {
+                "rosters": {
+                    "h": {
+                        "1": {
+                            "player": "Starter A", "time": "65", "red_card": "1",
+                            "position": "DC", "roster_out": "0",
+                        },
+                    },
+                    "a": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert red_cards[601] == [{"team_h_a": "h", "minute": 65}]
+
+
+def test_load_red_cards_from_cache_reconstructs_substitute_dismissal_minute(tmp_path):
+    """A substitute's `time` is minutes played *after* coming on, not a
+    match-clock minute. Modeled on the real Understat match_id 11973 case
+    (Eddie Nketiah: Sub, time="4", roster_out="406372" -> Alexandre
+    Lacazette, time="75" -> true dismissal minute 75 + 4 = 79)."""
+    import json
+
+    (tmp_path / "match_602.json").write_text(
+        json.dumps(
+            {
+                "rosters": {
+                    "h": {
+                        "406372": {
+                            "id": "406372", "player": "Replaced Player", "time": "75",
+                            "red_card": "0", "position": "FW", "roster_in": "406377",
+                            "roster_out": "0",
+                        },
+                        "406377": {
+                            "id": "406377", "player": "Substitute Player", "time": "4",
+                            "red_card": "1", "position": "Sub", "roster_in": "0",
+                            "roster_out": "406372",
+                        },
+                    },
+                    "a": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert red_cards[602] == [{"team_h_a": "h", "minute": 79}]
+
+
+def test_load_red_cards_from_cache_drops_unresolvable_substitute_red_card(tmp_path):
+    """If a substitute's roster_out doesn't resolve to another roster entry
+    (missing/broken linkage), the event must be dropped rather than stored
+    with a guessed or corrupted minute."""
+    import json
+
+    (tmp_path / "match_603.json").write_text(
+        json.dumps(
+            {
+                "rosters": {
+                    "h": {
+                        "999888": {
+                            "id": "999888", "player": "Orphan Substitute", "time": "10",
+                            "red_card": "1", "position": "Sub", "roster_in": "0",
+                            "roster_out": "777666",  # no entry with this id exists
+                        },
+                    },
+                    "a": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert 603 not in red_cards
+
+
 def test_load_red_cards_from_cache_skips_matches_with_no_red_cards(tmp_path):
     import json
 

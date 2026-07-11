@@ -49,9 +49,6 @@ def test_fetch_odds_concatenates_leagues_and_labels_them():
     assert list(df["HomeTeam"]) == ["Burnley", "Arsenal"]
 
 
-import pandas as pd
-import pytest
-
 from goles.db import get_connection, get_or_create_team, init_db
 from goles.loaders.football_data import (
     compute_no_vig_probabilities,
