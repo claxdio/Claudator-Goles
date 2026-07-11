@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from goles.backtest import BacktestResult
 from goles.dataset import FEATURE_NAMES, build_dataset, rows_to_arrays, split_by_season
 from goles.db import get_connection, init_db
 from goles.gbt_model import apply_platt_scaling, fit_platt_scaling, raw_predictions, train_gbt
+from goles.persistence import save_model
 
 TEST_SEASON = "2324"
 VALIDATION_SEASON = "2223"
@@ -19,6 +22,7 @@ VALIDATION_SEASON = "2223"
 # not inflate LightGBM's apparent edge -- if anything the real gap may be
 # larger than reported.
 POISSON_COMPARISON_BLEND = 0.1
+MODEL_DIR = Path("data") / "model"
 
 
 def main() -> None:
@@ -73,6 +77,9 @@ def main() -> None:
     importances = booster.feature_importance(importance_type="gain")
     for name, importance in sorted(zip(FEATURE_NAMES, importances), key=lambda x: -x[1]):
         print(f"  {name}: {importance:.1f}")
+
+    save_model(booster, (a, b), MODEL_DIR)
+    print(f"\nModelo guardado en {MODEL_DIR} (booster.txt + platt.json).")
 
 
 if __name__ == "__main__":
