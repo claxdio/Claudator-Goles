@@ -6,6 +6,7 @@ from goles.betfair.odds_store import get_connection, init_db
 from goles.betfair.poller import (
     compute_match_odds_probabilities,
     compute_over_under_probabilities,
+    discover_tracked_markets,
     extract_best_back_prices,
     parse_team_names_from_event,
     poll_once,
@@ -104,7 +105,7 @@ def test_poll_once_persists_a_snapshot_for_a_valid_match_odds_market():
     assert row == ("Arsenal", "Chelsea", "MATCH_ODDS")
 
 
-def test_poll_once_skips_market_with_no_available_prices_without_raising():
+def test_poll_once_skips_market_with_no_available_prices_without_raising(capsys):
     market_catalogue = [
         {
             "marketId": "1.111",
@@ -130,3 +131,84 @@ def test_poll_once_skips_market_with_no_available_prices_without_raising():
 
     count = conn.execute("SELECT COUNT(*) FROM odds_snapshots").fetchone()[0]
     assert count == 0
+    assert "ADVERTENCIA" in capsys.readouterr().out
+
+
+def test_poll_once_normalizes_home_away_names_via_alias_table():
+    """Once BETFAIR_TEAM_NAME_ALIASES gets a real entry, the runner name
+    (already normalized inside compute_match_odds_probabilities) must be
+    compared against an equally-normalized home/away name -- otherwise the
+    raw, unnormalized event-derived name would never match again."""
+    market_catalogue = [
+        {
+            "marketId": "1.111",
+            "marketType": "MATCH_ODDS",
+            "event": {"id": "e1", "name": "Man Utd v Chelsea"},
+            "runners": [
+                {"selectionId": 1, "runnerName": "Man Utd"},
+                {"selectionId": 2, "runnerName": "The Draw"},
+                {"selectionId": 3, "runnerName": "Chelsea"},
+            ],
+        }
+    ]
+    market_book = {
+        "marketId": "1.111",
+        "runners": [
+            {"selectionId": 1, "ex": {"availableToBack": [{"price": 1.5}]}},
+            {"selectionId": 2, "ex": {"availableToBack": [{"price": 4.0}]}},
+            {"selectionId": 3, "ex": {"availableToBack": [{"price": 6.0}]}},
+        ],
+    }
+    session = Mock()
+    conn = get_connection(":memory:")
+    init_db(conn)
+
+    with (
+        patch.dict(
+            "goles.betfair.team_aliases.BETFAIR_TEAM_NAME_ALIASES",
+            {"Man Utd": "Manchester United"},
+            clear=True,
+        ),
+        patch("goles.betfair.poller.list_market_book", return_value=[market_book]),
+    ):
+        poll_once(session, conn, market_catalogue)
+
+    row = conn.execute("SELECT home_team, away_team, market_type FROM odds_snapshots").fetchone()
+    assert row == ("Manchester United", "Chelsea", "MATCH_ODDS")
+
+
+def test_discover_tracked_markets_returns_catalogue_when_all_competitions_found():
+    with (
+        patch("goles.betfair.poller.find_competition_id", side_effect=["id-pl", "id-bl"]) as mock_find,
+        patch("goles.betfair.poller.list_market_catalogue", return_value=[{"marketId": "1.111"}]) as mock_list,
+    ):
+        session = Mock()
+        result = discover_tracked_markets(session)
+
+    assert result == [{"marketId": "1.111"}]
+    assert mock_find.call_count == 2
+    mock_list.assert_called_once_with(session, ["id-pl", "id-bl"], ["MATCH_ODDS", "OVER_UNDER_25"])
+
+
+def test_discover_tracked_markets_skips_competition_not_found():
+    with (
+        patch("goles.betfair.poller.find_competition_id", side_effect=[None, "id-bl"]),
+        patch("goles.betfair.poller.list_market_catalogue", return_value=[{"marketId": "1.222"}]) as mock_list,
+    ):
+        session = Mock()
+        result = discover_tracked_markets(session)
+
+    assert result == [{"marketId": "1.222"}]
+    mock_list.assert_called_once_with(session, ["id-bl"], ["MATCH_ODDS", "OVER_UNDER_25"])
+
+
+def test_discover_tracked_markets_returns_empty_list_when_no_competitions_found():
+    with (
+        patch("goles.betfair.poller.find_competition_id", return_value=None),
+        patch("goles.betfair.poller.list_market_catalogue") as mock_list,
+    ):
+        session = Mock()
+        result = discover_tracked_markets(session)
+
+    assert result == []
+    mock_list.assert_not_called()

@@ -128,10 +128,13 @@ def poll_once(session: BetfairSession, conn: sqlite3.Connection, market_catalogu
         except ValueError:
             print(f"ADVERTENCIA: no se pudo separar equipos de '{event.get('name')}', se omite mercado {market_id}.")
             continue
+        home_name = normalize_betfair_team_name(home_name)
+        away_name = normalize_betfair_team_name(away_name)
 
         runner_name_by_id = {r["selectionId"]: r["runnerName"] for r in catalogue_entry.get("runners", [])}
         prices_by_id = extract_best_back_prices(market_book)
         if prices_by_id is None:
+            print(f"ADVERTENCIA: no hay precios disponibles para el mercado {market_id} ('{event.get('name')}'), se omite.")
             continue
 
         market_type = catalogue_entry.get("marketType") or catalogue_entry.get("description", {}).get("marketType")
