@@ -250,3 +250,82 @@ def persist_shots(conn: sqlite3.Connection, records: list[dict]) -> None:
                 (match_id,),
             )
     conn.commit()
+
+
+def load_red_cards_from_cache(cache_dir: Path) -> dict[int, list[dict]]:
+    """Reads the raw cached Understat match JSONs and returns a mapping
+    match_id (game_id) -> list of {"team_h_a": "h"/"a", "minute": int} for
+    every red-carded player in that match, sourced from the `rosters`
+    section (NOT the `shots` section `load_shot_details_from_cache`
+    reads). A red-carded player's `time` field is verified (against real
+    matches) to be the minute they were dismissed.
+
+    Resilient to missing/malformed files (skipped, not raised) -- best
+    effort, like `load_shot_details_from_cache`. The match_id is taken
+    from the filename (match_{id}.json), the same reliable, always-present
+    naming convention the enrichment plan already verified for this cache."""
+    red_cards: dict[int, list[dict]] = {}
+    for match_file in Path(cache_dir).glob("match_*.json"):
+        try:
+            with open(match_file, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rosters = data.get("rosters", {})
+        if not isinstance(rosters, dict):
+            continue
+        try:
+            match_id = int(match_file.stem.split("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+
+        events = []
+        for side in ("h", "a"):
+            for player in rosters.get(side, {}).values():
+                if player.get("red_card") != "1":
+                    continue
+                try:
+                    minute = int(player["time"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                events.append({"team_h_a": side, "minute": minute})
+        if events:
+            red_cards[match_id] = events
+    return red_cards
+
+
+def persist_red_cards(
+    conn: sqlite3.Connection, red_cards_by_game_id: dict[int, list[dict]]
+) -> tuple[int, int]:
+    """Persists red-card events into the `cards` table, matching each
+    game_id to its internal match_id via `matches.understat_id` and each
+    team_h_a to home_team_id/away_team_id. Skips (as a no-op, not an
+    error) any match that already has rows in `cards`, so repeated calls
+    are safe. Returns (matches_processed, matches_not_found)."""
+    processed = 0
+    not_found = 0
+    for game_id, events in red_cards_by_game_id.items():
+        row = conn.execute(
+            "SELECT match_id, home_team_id, away_team_id FROM matches WHERE understat_id = ?",
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            not_found += 1
+            continue
+        match_id, home_id, away_id = row
+
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM cards WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
+        if existing > 0:
+            continue
+
+        for event in events:
+            team_id = home_id if event["team_h_a"] == "h" else away_id
+            conn.execute(
+                "INSERT INTO cards (match_id, team_id, minute) VALUES (?, ?, ?)",
+                (match_id, team_id, event["minute"]),
+            )
+        processed += 1
+    conn.commit()
+    return processed, not_found

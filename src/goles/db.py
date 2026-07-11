@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS elo_ratings (
     elo REAL NOT NULL,
     PRIMARY KEY (team_name, date)
 );
+
+CREATE TABLE IF NOT EXISTS cards (
+    card_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL REFERENCES matches(match_id),
+    team_id INTEGER NOT NULL REFERENCES teams(team_id),
+    minute INTEGER NOT NULL
+);
 """
 
 

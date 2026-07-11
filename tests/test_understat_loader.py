@@ -3,10 +3,12 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from goles.db import get_connection, init_db
+from goles.db import get_connection, get_or_create_team, init_db
 from goles.loaders.understat import (
     fetch_understat_shots,
+    load_red_cards_from_cache,
     load_shot_details_from_cache,
+    persist_red_cards,
     persist_shots,
     shots_to_records,
 )
@@ -348,3 +350,93 @@ def test_load_shot_details_from_cache_reads_raw_match_json(tmp_path):
     assert details[111] == {"situation": "OpenPlay", "shot_type": "LeftFoot", "last_action": "Pass"}
     assert details[222] == {"situation": "Penalty", "shot_type": "RightFoot", "last_action": "Standard"}
     assert len(details) == 2
+
+
+def test_load_red_cards_from_cache_reads_rosters(tmp_path):
+    import json
+
+    (tmp_path / "match_501.json").write_text(
+        json.dumps(
+            {
+                "rosters": {
+                    "h": {
+                        "1": {"player": "Player A", "time": "65", "red_card": "1"},
+                        "2": {"player": "Player B", "time": "90", "red_card": "0"},
+                    },
+                    "a": {
+                        "3": {"player": "Player C", "time": "78", "red_card": "1"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert red_cards[501] == [
+        {"team_h_a": "h", "minute": 65},
+        {"team_h_a": "a", "minute": 78},
+    ]
+
+
+def test_load_red_cards_from_cache_skips_matches_with_no_red_cards(tmp_path):
+    import json
+
+    (tmp_path / "match_502.json").write_text(
+        json.dumps({"rosters": {"h": {"1": {"player": "Player A", "time": "90", "red_card": "0"}}, "a": {}}}),
+        encoding="utf-8",
+    )
+
+    red_cards = load_red_cards_from_cache(tmp_path)
+
+    assert 502 not in red_cards
+
+
+def test_persist_red_cards_matches_by_understat_id_and_side():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Team A")
+    away_id = get_or_create_team(conn, "Team B")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (501, 'TEST', '2324', '2023-08-11', ?, ?)""",
+        (home_id, away_id),
+    )
+    conn.commit()
+
+    red_cards_by_game_id = {501: [{"team_h_a": "h", "minute": 65}, {"team_h_a": "a", "minute": 78}]}
+    processed, not_found = persist_red_cards(conn, red_cards_by_game_id)
+
+    assert processed == 1
+    assert not_found == 0
+    rows = conn.execute("SELECT team_id, minute FROM cards ORDER BY minute").fetchall()
+    assert rows == [(home_id, 65), (away_id, 78)]
+
+
+def test_persist_red_cards_counts_unmatched_game_ids():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    red_cards_by_game_id = {999: [{"team_h_a": "h", "minute": 30}]}
+    processed, not_found = persist_red_cards(conn, red_cards_by_game_id)
+    assert processed == 0
+    assert not_found == 1
+
+
+def test_persist_red_cards_is_idempotent():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    home_id = get_or_create_team(conn, "Team A")
+    away_id = get_or_create_team(conn, "Team B")
+    conn.execute(
+        """INSERT INTO matches (understat_id, league, season, date, home_team_id, away_team_id)
+           VALUES (501, 'TEST', '2324', '2023-08-11', ?, ?)""",
+        (home_id, away_id),
+    )
+    conn.commit()
+    red_cards_by_game_id = {501: [{"team_h_a": "h", "minute": 65}]}
+    persist_red_cards(conn, red_cards_by_game_id)
+    persist_red_cards(conn, red_cards_by_game_id)  # second call: no-op for this match
+
+    count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+    assert count == 1
