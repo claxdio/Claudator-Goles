@@ -120,6 +120,10 @@ def poll_once(session: BetfairSession, conn: sqlite3.Connection, market_catalogu
         market_id = catalogue_entry["marketId"]
         market_book = books_by_id.get(market_id)
         if market_book is None:
+            print(
+                f"ADVERTENCIA: no se encontro market book para el mercado {market_id} "
+                f"('{catalogue_entry.get('event', {}).get('name')}'), se omite."
+            )
             continue
 
         event = catalogue_entry.get("event", {})

@@ -134,6 +134,34 @@ def test_poll_once_skips_market_with_no_available_prices_without_raising(capsys)
     assert "ADVERTENCIA" in capsys.readouterr().out
 
 
+def test_poll_once_warns_when_market_absent_from_list_market_book_response(capsys):
+    """A market present in market_catalogue but absent from the
+    list_market_book response (e.g. suspended/removed) must be skipped with
+    a printed ADVERTENCIA warning -- never silently."""
+    market_catalogue = [
+        {
+            "marketId": "1.111",
+            "marketType": "MATCH_ODDS",
+            "event": {"id": "e1", "name": "Arsenal v Chelsea"},
+            "runners": [
+                {"selectionId": 1, "runnerName": "Arsenal"},
+                {"selectionId": 2, "runnerName": "The Draw"},
+                {"selectionId": 3, "runnerName": "Chelsea"},
+            ],
+        }
+    ]
+    session = Mock()
+    conn = get_connection(":memory:")
+    init_db(conn)
+
+    with patch("goles.betfair.poller.list_market_book", return_value=[]):
+        poll_once(session, conn, market_catalogue)  # must not raise
+
+    count = conn.execute("SELECT COUNT(*) FROM odds_snapshots").fetchone()[0]
+    assert count == 0
+    assert "ADVERTENCIA" in capsys.readouterr().out
+
+
 def test_poll_once_normalizes_home_away_names_via_alias_table():
     """Once BETFAIR_TEAM_NAME_ALIASES gets a real entry, the runner name
     (already normalized inside compute_match_odds_probabilities) must be
