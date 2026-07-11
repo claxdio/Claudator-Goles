@@ -151,7 +151,7 @@ def shots_to_records(shots_df: pd.DataFrame, shot_details: dict[int, dict] | Non
             loc_y = row_dict.get("location_y")
             records.append(
                 {
-                    "match_id": row_dict["game_id"],
+                    "match_id": int(row_dict["game_id"]),
                     "league": league,
                     "season": season,
                     "home_team": home_team,
@@ -193,7 +193,13 @@ def persist_shots(conn: sqlite3.Connection, records: list[dict]) -> None:
     known_matches: dict[int, object] = {}
 
     for rec in records:
-        match_id_key = rec["match_id"]
+        # Defense in depth: coerce to a plain Python int even though
+        # shots_to_records already does this too. sqlite3 silently binds a
+        # numpy.int64 parameter with BLOB storage class instead of INTEGER,
+        # which is exactly the bug that corrupted matches.understat_id in
+        # production, so this insert path must never trust an un-cast
+        # match_id, regardless of what the caller passes in.
+        match_id_key = int(rec["match_id"])
         cached = known_matches.get(match_id_key)
         if cached is _SKIP:
             continue

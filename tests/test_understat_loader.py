@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import numpy
 import pandas as pd
 import pytest
 
@@ -330,6 +331,37 @@ def test_persist_shots_stores_enrichment_columns():
         "SELECT location_x, location_y, situation, shot_type, last_action FROM shots"
     ).fetchone()
     assert row == (0.9, 0.45, "FromCorner", "Head", "Cross")
+
+
+def test_persist_shots_stores_understat_id_as_integer_not_blob_for_numpy_match_id():
+    """Regression test for a real data-integrity bug: shots_to_records used to
+    pass through row_dict["game_id"] unconverted, which is a numpy.int64 (a
+    pandas groupby key), not a plain Python int. sqlite3 silently binds
+    numpy.int64 parameters with BLOB storage class instead of coercing them
+    to INTEGER, which meant matches.understat_id was stored as an 8-byte BLOB
+    for all rows -- silently breaking every later `WHERE understat_id = ?`
+    lookup done with a plain Python int (e.g. persist_red_cards). This test
+    simulates a record built with a numpy.int64 match_id directly (as would
+    happen if shots_to_records regressed) and asserts persist_shots still
+    ends up with INTEGER storage class in the database."""
+    conn = get_connection(":memory:")
+    init_db(conn)
+    records = [
+        {
+            "match_id": numpy.int64(12345), "league": "TEST", "season": "2324",
+            "home_team": "Team A", "away_team": "Team B",
+            "minute": 10, "team": "home", "xg": 0.1, "is_goal": False,
+        },
+    ]
+    persist_shots(conn, records)
+    # Look up the internal match_id without filtering by understat_id -- if
+    # the bug were present, understat_id would be a BLOB and a `WHERE
+    # understat_id = 12345` filter would never match, masking the failure.
+    internal_match_id = conn.execute("SELECT match_id FROM matches").fetchone()[0]
+    row = conn.execute(
+        "SELECT typeof(understat_id) FROM matches WHERE match_id = ?", (internal_match_id,)
+    ).fetchone()
+    assert row == ("integer",)
 
 
 def test_load_shot_details_from_cache_reads_raw_match_json(tmp_path):
