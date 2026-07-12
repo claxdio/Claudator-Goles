@@ -10,6 +10,7 @@ dependencies = [
     "scipy>=1.13",
     "lightgbm>=4.0",
     "numpy>=1.26",
+    "PySocks>=1.7.1",
 ]
 
 [project.optional-dependencies]

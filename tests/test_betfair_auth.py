@@ -66,3 +66,27 @@ def test_betfair_session_relogs_in_once_on_non_200_response():
     assert mock_request.call_count == 2
     _, kwargs = mock_request.call_args_list[1]
     assert kwargs["headers"]["X-Authentication"] == "tok2"
+
+
+def test_cert_login_routes_through_proxy_when_given():
+    with patch("goles.betfair.auth.requests.post", return_value=_mock_response(
+        {"sessionToken": "abc123", "loginStatus": "SUCCESS"}
+    )) as mock_post:
+        cert_login("appkey", "user", "pass", "cert.crt", "cert.key", proxy_url="socks5h://127.0.0.1:1080")
+    _, kwargs = mock_post.call_args
+    assert kwargs["proxies"] == {"http": "socks5h://127.0.0.1:1080", "https": "socks5h://127.0.0.1:1080"}
+
+
+def test_betfair_session_routes_api_calls_through_proxy_when_given():
+    login_response = _mock_response({"sessionToken": "tok1", "loginStatus": "SUCCESS"})
+    api_response = _mock_response({"result": "ok"})
+    with patch("goles.betfair.auth.requests.post", return_value=login_response) as mock_post:
+        with patch("goles.betfair.auth.requests.request", return_value=api_response) as mock_request:
+            session = BetfairSession(
+                "appkey", "user", "pass", "cert.crt", "cert.key", proxy_url="socks5h://127.0.0.1:1080"
+            )
+            session.request("POST", "https://example.test/op1/", json={"a": 1})
+    _, login_kwargs = mock_post.call_args
+    assert login_kwargs["proxies"] == {"http": "socks5h://127.0.0.1:1080", "https": "socks5h://127.0.0.1:1080"}
+    _, request_kwargs = mock_request.call_args
+    assert request_kwargs["proxies"] == {"http": "socks5h://127.0.0.1:1080", "https": "socks5h://127.0.0.1:1080"}

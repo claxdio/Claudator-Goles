@@ -182,8 +182,9 @@ def main() -> None:
     password = os.environ["BETFAIR_PASSWORD"]
     cert_file = os.environ.get("BETFAIR_CERT_FILE", "/run/secrets/betfair/client-2048.crt")
     key_file = os.environ.get("BETFAIR_KEY_FILE", "/run/secrets/betfair/client-2048.key")
+    proxy_url = os.environ.get("BETFAIR_SOCKS_PROXY_URL")
 
-    session = BetfairSession(app_key, username, password, cert_file, key_file)
+    session = BetfairSession(app_key, username, password, cert_file, key_file, proxy_url=proxy_url)
     conn = get_connection()
     init_db(conn)
 
