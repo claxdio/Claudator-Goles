@@ -21,12 +21,13 @@ The trained model predicts "probability of a goal in the next 15 minutes" **duri
 
 ## Architecture
 
-New subpackage `src/goles/sofascore/`, deployed as its own Dokploy Application (`sofascore-live-scraper`) — same isolation pattern as `betfair-odds-poller`, so a failure in one poller can't affect the other:
+New subpackage `src/goles/sofascore/`. **Deployment target: the developer's home Windows PC, not the VPS** — see "Actualización: bloqueo por IP de datacenter" below for why.
 
 - `client.py` — thin wrappers over the 3 confirmed endpoints (`list_live_events`, `get_shotmap`, `get_incidents`), each taking a `tls_requests.Client` instance (duck-typed, so tests pass a stub — same pattern as `goles.betfair.client`).
 - `team_aliases.py` — `SOFASCORE_TEAM_NAME_ALIASES: dict[str, str]` (starts empty — Sofascore's exact team-name strings for our tracked teams haven't been observed yet, same honest-starter-table precedent as `goles.betfair.team_aliases`) + `normalize_sofascore_team_name`.
-- `store.py` — SQLite schema + writer for a **new, separate database** `live_match_state.db` (distinct from both `data/goles.db` and `data/live_odds.db`): two tables, `shots` and `cards`, storing the raw verified fields above (not yet translated into the ML feature shape — that translation is the next sub-project's job).
-- `poller.py` — the persistent loop: each cycle, calls `list_live_events`, filters to events whose tournament name exactly matches one of `TRACKED_TOURNAMENTS = ["Premier League", "Bundesliga"]` (exact match, not substring — avoids false positives like "Scottish Premier League"), and for each matched live match fetches shotmap + incidents and upserts new rows.
+- `store.py` — SQLite schema + writer for a **new, separate database** `data/live_match_state.db` (distinct from both `data/goles.db` and the VPS-side `live_odds.db`), gitignored like the rest of `data/`: two tables, `shots` and `cards`, storing the raw verified fields above (not yet translated into the ML feature shape — that translation is the next sub-project's job).
+- `poller.py` — the persistent loop: each cycle, calls `list_live_events`, filters to events whose tournament name exactly matches one of `TRACKED_TOURNAMENTS = ["Premier League", "Bundesliga"]` (exact match, not substring — avoids false positives like "Scottish Premier League"), and for each matched live match fetches shotmap + incidents and upserts new rows. After each cycle, `scp`s the updated `live_match_state.db` to the VPS (`root@85.239.245.73:/root/goles-live-match-state/live_match_state.db`) using the same dedicated SSH key already set up on this machine (`~/.ssh/id_ed25519_goles_vps`) — no new server/API to maintain, and it lands wherever the future live-inference plan expects to read it from (that plan already runs on the VPS, alongside `live_odds.db`).
+- Runs via **Windows Task Scheduler**: a task configured to start at logon/system startup, run the poller script in the project's existing venv, and restart automatically on failure — the standard no-extra-software way to keep a script alive on Windows.
 
 ## Data model
 
@@ -36,11 +37,18 @@ New subpackage `src/goles/sofascore/`, deployed as its own Dokploy Application (
 
 ## Verification / Testing
 
-Same TDD discipline as the rest of the project: every Sofascore HTTP call mocked in tests (via a stub client with a `.get()` method, no real network access required). The one real-network verification step is a manual run against the actual live endpoints once deployed (same precedent as the Betfair poller) — checking that real shots/cards accumulate in `live_match_state.db` for whatever matches are live in the tracked leagues at deploy time.
+Same TDD discipline as the rest of the project: every Sofascore HTTP call mocked in tests (via a stub client with a `.get()` method, no real network access required). The real-network verification steps are manual (same precedent as the Betfair poller): a real run against the live endpoints confirming shots/cards accumulate in `data/live_match_state.db` for whatever matches are live in the tracked leagues at the time, confirming the `scp` sync actually lands the file on the VPS, and confirming the Windows Task Scheduler task restarts the poller after a simulated failure.
 
 ## Out of scope (deliberately, for this plan)
 
 - Translating raw Sofascore fields into `compute_ml_features`'s exact input shape (situation-vocabulary mapping, box-coordinate threshold calibration) — next sub-project.
 - Running the model / producing a live prediction — next sub-project.
 - Telegram delivery — next sub-project.
-- FotMob as a fallback/second source — not needed now that Sofascore is confirmed working.
+
+## Actualización: bloqueo por IP de datacenter (no geográfico) — FotMob descartado
+
+Once `client.py` was about to be built against the real endpoints, a from-the-VPS verification run (same discipline as every other endpoint check in this project) hit `403` on `https://api.sofascore.com/api/v1/sport/football/events/live` — both directly from the Missouri VPS and through the UK Oracle proxy already built for Betfair. This ruled out a geo-block (the same fix that worked for Betfair does nothing here) and pointed at an IP-reputation/ASN-based block against known datacenter/hosting-provider ranges (Contabo and Oracle Cloud both blocked; the same request from a home residential connection succeeds). Two false leads were investigated and ruled out concretely before reaching that conclusion: a UDP receive-buffer warning tied to the TLS-impersonation library's QUIC handshake (fixed via `sysctl -w net.core.rmem_max=...` on the VPS host, but the `403` persisted unchanged, proving it wasn't the cause), and a transient rate-limit from repeated testing (ruled out by retrying cleanly after a 15-minute gap — still `403`).
+
+**FotMob was evaluated as an alternative and rejected.** Its unofficial API requires a signed `x-mas` request header that community wrapper libraries obtain by querying a **third-party, unidentified server at a bare IP address** (`http://46.101.91.154:6006/`) — an unverified, unmaintained-by-anyone-known dependency for producing an authentication token. This is a worse trust posture than Sofascore's IP-based block, not a better one, so FotMob is not used.
+
+**Resolution:** run this scraper from the developer's home Windows PC (confirmed working — residential IPs aren't subject to this block), syncing its output to the VPS via `scp` after each poll cycle, rather than as a Dokploy service. This is a real operational tradeoff (the home PC must stay powered on and connected for the scraper to keep running) accepted explicitly by the user in preference to a paid residential-proxy service, which would have been the first time this project paid for infrastructure.
