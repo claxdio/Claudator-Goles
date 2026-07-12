@@ -59,6 +59,77 @@ def test_poll_once_persists_shots_and_red_cards():
     assert card_rows == [("Arsenal", "Chelsea", "away", 55, "red")]  # only the red card, not the yellow
 
 
+def test_poll_once_handles_shots_and_incidents_missing_optional_fields():
+    event = {
+        "id": 555,
+        "homeTeam": {"name": "Arsenal"},
+        "awayTeam": {"name": "Chelsea"},
+        "tournament": {"name": "Premier League"},
+    }
+    shots = [
+        {"id": 111, "time": 30, "xg": 0.1, "shotType": "miss", "isHome": True},
+    ]
+    incidents = [
+        {"time": 40, "incidentType": "card", "incidentClass": "red"},
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    client = Mock()
+
+    with patch("goles.sofascore.poller.get_shotmap", return_value=shots):
+        with patch("goles.sofascore.poller.get_incidents", return_value=incidents):
+            poll_once(client, conn, [event])  # must not raise
+
+    shot_rows = conn.execute(
+        "SELECT team, minute, location_x, location_y, situation, body_part FROM shots"
+    ).fetchall()
+    assert shot_rows == [("home", 30, None, None, None, None)]
+
+    # Missing isHome on the incident silently defaults to "away" -- documented
+    # existing behavior, not something this test is meant to change.
+    card_rows = conn.execute("SELECT team, minute, card_type FROM cards").fetchall()
+    assert card_rows == [("away", 40, "red")]
+
+
+def test_poll_once_isolates_failures_between_events():
+    event_1 = {
+        "id": 1,
+        "homeTeam": {"name": "Arsenal"},
+        "awayTeam": {"name": "Chelsea"},
+        "tournament": {"name": "Premier League"},
+    }
+    event_2 = {
+        "id": 2,
+        "homeTeam": {"name": "Bayern Munich"},
+        "awayTeam": {"name": "Dortmund"},
+        "tournament": {"name": "Bundesliga"},
+    }
+    event_2_shots = [
+        {
+            "id": 999, "time": 15, "xg": 0.3, "shotType": "goal",
+            "situation": "regular", "isHome": True,
+            "playerCoordinates": {"x": 1.0, "y": 2.0}, "bodyPart": "left-foot",
+        },
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    client = Mock()
+
+    def fake_get_shotmap(client, event_id):
+        if event_id == event_1["id"]:
+            raise RuntimeError("boom")
+        return event_2_shots
+
+    with patch("goles.sofascore.poller.get_shotmap", side_effect=fake_get_shotmap):
+        with patch("goles.sofascore.poller.get_incidents", return_value=[]):
+            poll_once(client, conn, [event_1, event_2])  # must not raise
+
+    shot_rows = conn.execute(
+        "SELECT home_team, away_team, team, minute FROM shots"
+    ).fetchall()
+    assert shot_rows == [("Bayern Munich", "Dortmund", "home", 15)]
+
+
 def test_sync_to_vps_invokes_scp_with_expected_arguments():
     with patch("goles.sofascore.poller.subprocess.run") as mock_run:
         sync_to_vps(db_path="data/live_match_state.db")

@@ -40,42 +40,45 @@ def poll_once(client, conn, live_events: list[dict]) -> None:
     fetched_at = datetime.now(timezone.utc).isoformat()
     for event in live_events:
         event_id = event["id"]
-        home_team = normalize_sofascore_team_name(event["homeTeam"]["name"])
-        away_team = normalize_sofascore_team_name(event["awayTeam"]["name"])
+        try:
+            home_team = normalize_sofascore_team_name(event["homeTeam"]["name"])
+            away_team = normalize_sofascore_team_name(event["awayTeam"]["name"])
 
-        shots = get_shotmap(client, event_id)
-        for shot in shots:
-            team = "home" if shot.get("isHome") else "away"
-            coordinates = shot.get("playerCoordinates") or {}
-            persist_shot(
-                conn,
-                sofascore_shot_id=shot["id"],
-                sofascore_event_id=event_id,
-                fetched_at=fetched_at,
-                home_team=home_team,
-                away_team=away_team,
-                team=team,
-                minute=shot["time"],
-                xg=shot["xg"],
-                is_goal=shot.get("shotType") == "goal",
-                shot_type=shot.get("shotType", ""),
-                situation=shot.get("situation"),
-                location_x=coordinates.get("x"),
-                location_y=coordinates.get("y"),
-                body_part=shot.get("bodyPart"),
-            )
+            shots = get_shotmap(client, event_id)
+            for shot in shots:
+                team = "home" if shot.get("isHome") else "away"
+                coordinates = shot.get("playerCoordinates") or {}
+                persist_shot(
+                    conn,
+                    sofascore_shot_id=shot["id"],
+                    sofascore_event_id=event_id,
+                    fetched_at=fetched_at,
+                    home_team=home_team,
+                    away_team=away_team,
+                    team=team,
+                    minute=shot["time"],
+                    xg=shot["xg"],
+                    is_goal=shot.get("shotType") == "goal",
+                    shot_type=shot.get("shotType", ""),
+                    situation=shot.get("situation"),
+                    location_x=coordinates.get("x"),
+                    location_y=coordinates.get("y"),
+                    body_part=shot.get("bodyPart"),
+                )
 
-        incidents = get_incidents(client, event_id)
-        for incident in incidents:
-            if incident.get("incidentType") != "card":
-                continue
-            incident_class = incident.get("incidentClass")
-            if incident_class not in RED_CARD_INCIDENT_CLASSES:
-                continue
-            team = "home" if incident.get("isHome") else "away"
-            persist_card(
-                conn, event_id, fetched_at, home_team, away_team, team, incident["time"], incident_class
-            )
+            incidents = get_incidents(client, event_id)
+            for incident in incidents:
+                if incident.get("incidentType") != "card":
+                    continue
+                incident_class = incident.get("incidentClass")
+                if incident_class not in RED_CARD_INCIDENT_CLASSES:
+                    continue
+                team = "home" if incident.get("isHome") else "away"
+                persist_card(
+                    conn, event_id, fetched_at, home_team, away_team, team, incident["time"], incident_class
+                )
+        except Exception as exc:
+            print(f"ADVERTENCIA: fallo al procesar el evento {event_id} ({exc}), se continua con el resto.")
 
 
 def sync_to_vps(db_path: str | Path = DEFAULT_LIVE_MATCH_STATE_DB_PATH) -> None:
