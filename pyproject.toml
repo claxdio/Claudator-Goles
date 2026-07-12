@@ -11,6 +11,7 @@ dependencies = [
     "lightgbm>=4.0",
     "numpy>=1.26",
     "PySocks>=1.7.1",
+    "wrapper-tls-requests>=1.2.5",
 ]
 
 [project.optional-dependencies]
