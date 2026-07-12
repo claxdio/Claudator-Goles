@@ -12,7 +12,7 @@ from goles.betfair.odds_store import get_connection, init_db, persist_snapshot
 from goles.betfair.team_aliases import normalize_betfair_team_name
 from goles.loaders.football_data import compute_no_vig_probabilities, compute_no_vig_two_way
 
-TRACKED_COMPETITIONS = ["Premier League", "Bundesliga"]
+TRACKED_COMPETITIONS = ["Premier League", "Bundesliga", "Chilean Primera Division"]
 MATCH_ODDS_TYPE = "MATCH_ODDS"
 OVER_UNDER_TYPE = "OVER_UNDER_25"
 POLL_INTERVAL_SECONDS = 60

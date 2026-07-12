@@ -207,27 +207,27 @@ def test_poll_once_normalizes_home_away_names_via_alias_table():
 
 def test_discover_tracked_markets_returns_catalogue_when_all_competitions_found():
     with (
-        patch("goles.betfair.poller.find_competition_id", side_effect=["id-pl", "id-bl"]) as mock_find,
+        patch("goles.betfair.poller.find_competition_id", side_effect=["id-pl", "id-bl", "id-chi"]) as mock_find,
         patch("goles.betfair.poller.list_market_catalogue", return_value=[{"marketId": "1.111"}]) as mock_list,
     ):
         session = Mock()
         result = discover_tracked_markets(session)
 
     assert result == [{"marketId": "1.111"}]
-    assert mock_find.call_count == 2
-    mock_list.assert_called_once_with(session, ["id-pl", "id-bl"], ["MATCH_ODDS", "OVER_UNDER_25"])
+    assert mock_find.call_count == 3
+    mock_list.assert_called_once_with(session, ["id-pl", "id-bl", "id-chi"], ["MATCH_ODDS", "OVER_UNDER_25"])
 
 
 def test_discover_tracked_markets_skips_competition_not_found():
     with (
-        patch("goles.betfair.poller.find_competition_id", side_effect=[None, "id-bl"]),
+        patch("goles.betfair.poller.find_competition_id", side_effect=[None, "id-bl", "id-chi"]),
         patch("goles.betfair.poller.list_market_catalogue", return_value=[{"marketId": "1.222"}]) as mock_list,
     ):
         session = Mock()
         result = discover_tracked_markets(session)
 
     assert result == [{"marketId": "1.222"}]
-    mock_list.assert_called_once_with(session, ["id-bl"], ["MATCH_ODDS", "OVER_UNDER_25"])
+    mock_list.assert_called_once_with(session, ["id-bl", "id-chi"], ["MATCH_ODDS", "OVER_UNDER_25"])
 
 
 def test_discover_tracked_markets_returns_empty_list_when_no_competitions_found():
