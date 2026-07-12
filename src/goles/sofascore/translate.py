@@ -9,6 +9,7 @@ SITUATION_MAP = {
     "fast-break": "OpenPlay",
     "corner": "FromCorner",
     "set-piece": "SetPiece",
+    "throw-in-set-piece": "SetPiece",
     "free-kick": "DirectFreekick",
     "penalty": "Penalty",
 }

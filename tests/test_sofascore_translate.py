@@ -38,6 +38,7 @@ def test_translate_open_play_variants_all_map_to_openplay():
 
 def test_translate_set_piece_vocabulary():
     assert translate_shot(_sofa_shot(situation="set-piece"))["situation"] == "SetPiece"
+    assert translate_shot(_sofa_shot(situation="throw-in-set-piece"))["situation"] == "SetPiece"
     assert translate_shot(_sofa_shot(situation="free-kick"))["situation"] == "DirectFreekick"
     assert translate_shot(_sofa_shot(situation="penalty"))["situation"] == "Penalty"
 
