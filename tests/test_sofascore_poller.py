@@ -133,6 +133,39 @@ def test_poll_once_isolates_failures_between_events():
     assert shot_rows == [("Bayern Munich", "Dortmund", "home", 15)]
 
 
+def test_poll_once_isolates_failures_between_individual_shots_and_incidents():
+    """A single malformed shot (missing a required field, e.g. no 'xg' --
+    observed for real on some lower-tier Sofascore leagues) must not skip
+    the rest of that same event's well-formed shots/incidents."""
+    event = {
+        "id": 42,
+        "homeTeam": {"name": "Arsenal"},
+        "awayTeam": {"name": "Chelsea"},
+        "tournament": {"name": "Premier League"},
+    }
+    shots = [
+        {"id": 1, "time": 10, "shotType": "miss", "isHome": True},  # missing "xg" -- raises
+        {"id": 2, "time": 20, "xg": 0.2, "shotType": "goal", "isHome": False},  # well-formed
+    ]
+    incidents = [
+        {"incidentType": "card", "incidentClass": "red"},  # missing "time" -- raises when persisting
+        {"time": 30, "incidentType": "card", "incidentClass": "red", "isHome": True},  # well-formed
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    client = Mock()
+
+    with patch("goles.sofascore.poller.get_shotmap", return_value=shots):
+        with patch("goles.sofascore.poller.get_incidents", return_value=incidents):
+            poll_once(client, conn, [event])  # must not raise
+
+    shot_rows = conn.execute("SELECT team, minute, is_goal FROM shots").fetchall()
+    assert shot_rows == [("away", 20, 1)]  # only the well-formed shot persisted
+
+    card_rows = conn.execute("SELECT team, minute, card_type FROM cards").fetchall()
+    assert card_rows == [("home", 30, "red")]
+
+
 def test_sync_to_vps_invokes_scp_with_expected_arguments():
     with patch("goles.sofascore.poller.subprocess.run") as mock_run:
         sync_to_vps(db_path="data/live_match_state.db")
