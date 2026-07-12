@@ -1,4 +1,7 @@
+import subprocess
 from unittest.mock import Mock, patch
+
+import pytest
 
 from goles.sofascore.poller import discover_tracked_live_events, poll_once, sync_to_vps
 from goles.sofascore.store import get_connection, init_db
@@ -140,3 +143,12 @@ def test_sync_to_vps_invokes_scp_with_expected_arguments():
     assert "data/live_match_state.db" in command
     assert command[-1].endswith(":/root/goles-live-match-state/live_match_state.db")
     assert kwargs["check"] is True
+
+
+def test_sync_to_vps_surfaces_scp_stderr_on_failure():
+    error = subprocess.CalledProcessError(returncode=1, cmd=["scp"], stderr=b"Permission denied")
+    with patch("goles.sofascore.poller.subprocess.run", side_effect=error):
+        with pytest.raises(Exception) as exc_info:
+            sync_to_vps(db_path="data/live_match_state.db")
+    assert "Permission denied" in str(exc_info.value)
+    assert "returned non-zero exit status" not in str(exc_info.value)

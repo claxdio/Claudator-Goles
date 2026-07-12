@@ -85,15 +85,19 @@ def sync_to_vps(db_path: str | Path = DEFAULT_LIVE_MATCH_STATE_DB_PATH) -> None:
     """Copies the local live-match-state SQLite file to the VPS via scp,
     reusing the dedicated SSH key already set up for VPS access. Raises on
     failure -- main()'s broad except catches it and retries next cycle."""
-    subprocess.run(
-        [
-            "scp", "-i", VPS_SSH_KEY, "-o", "StrictHostKeyChecking=accept-new",
-            str(db_path), f"{VPS_HOST}:{VPS_REMOTE_PATH}",
-        ],
-        check=True,
-        capture_output=True,
-        timeout=30,
-    )
+    try:
+        subprocess.run(
+            [
+                "scp", "-i", VPS_SSH_KEY, "-o", "StrictHostKeyChecking=accept-new",
+                str(db_path), f"{VPS_HOST}:{VPS_REMOTE_PATH}",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace") if exc.stderr else "(no stderr captured)"
+        raise RuntimeError(f"scp failed (exit {exc.returncode}): {stderr}") from exc
 
 
 def main() -> None:
