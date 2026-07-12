@@ -56,3 +56,15 @@ Three offline stages (this spec), with the live stage (D) deliberately deferred:
 - Copa Chile in the model (no shot data exists; alerts-only at most, later).
 - Scraping FootyStats/FotMob/TSDL (investigated and rejected above).
 - Any paid service (unchanged project constraint).
+
+## Task 1 note: xG-vs-Understat correlation ceiling (0.68, not the planned 0.80)
+
+Real training run on all 106,538 historical shots: correlation with Understat's own xG on held-out validation = **0.6780** (MAE 0.0598; our mean xG 0.1081 vs Understat's 0.1093 vs actual goal rate 0.1033 — well calibrated in aggregate, just less correlated shot-by-shot).
+
+Investigated as a potential bug (systematic-debugging process) before proceeding:
+- Vocabulary in `situation`/`shot_type` is clean — no unexpected values, no null coordinates.
+- Train-set correlation (0.6956) ≈ validation-set correlation (0.6780) — rules out overfitting.
+- Feature geometry checked and sane (angle/distance formulas, y centered at 0.5, x distribution as expected).
+- Tried a richer model (raw x/y + polynomial terms + more leaves/capacity as an alternative feature set): correlation got *worse* (0.6537), not better — ruling out "our feature engineering is just missing an obvious transform."
+
+**Conclusion:** this is a real ceiling, not a bug. A model trained only on shot location + situation + body part cannot fully replicate Understat's own xG, which almost certainly incorporates shot context we deliberately excluded (shot speed, GK/defender positioning, assist type, one-on-one, rebounds — the same `lastAction`-derived signals Sofascore doesn't expose either, so this exclusion is also what keeps Chilean train/serve features consistent). **Decision (with the user): accept 0.68 and proceed** — Task 3's correlation against Sofascore's *own* published xG (threshold ≥0.75) is the metric that actually matters for this trial, since it validates the coordinate/vocabulary translation layer against the same kind of location-based model we're replicating, not a richer proprietary one.
