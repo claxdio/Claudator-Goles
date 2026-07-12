@@ -166,6 +166,34 @@ def test_poll_once_isolates_failures_between_individual_shots_and_incidents():
     assert card_rows == [("home", 30, "red")]
 
 
+def test_poll_once_still_persists_cards_when_shotmap_fetch_fails():
+    """Observed for real: some matches 404 on the shotmap endpoint but
+    still have working incidents data (e.g. lower-tier Copa Chile ties).
+    A shotmap fetch failure must not discard that match's card data."""
+    event = {
+        "id": 16416636,
+        "homeTeam": {"name": "Arsenal"},
+        "awayTeam": {"name": "Chelsea"},
+        "tournament": {"name": "Premier League"},
+    }
+    incidents = [
+        {"time": 60, "incidentType": "card", "incidentClass": "red", "isHome": True},
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    client = Mock()
+
+    with patch("goles.sofascore.poller.get_shotmap", side_effect=RuntimeError("404 Not Found")):
+        with patch("goles.sofascore.poller.get_incidents", return_value=incidents):
+            poll_once(client, conn, [event])  # must not raise
+
+    shot_rows = conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
+    assert shot_rows == 0  # no shots, as expected -- shotmap fetch failed
+
+    card_rows = conn.execute("SELECT team, minute, card_type FROM cards").fetchall()
+    assert card_rows == [("home", 60, "red")]  # but the card still made it in
+
+
 def test_sync_to_vps_invokes_scp_with_expected_arguments():
     with patch("goles.sofascore.poller.subprocess.run") as mock_run:
         sync_to_vps(db_path="data/live_match_state.db")

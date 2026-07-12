@@ -43,7 +43,16 @@ def poll_once(client, conn, live_events: list[dict]) -> None:
         try:
             home_team = normalize_sofascore_team_name(event["homeTeam"]["name"])
             away_team = normalize_sofascore_team_name(event["awayTeam"]["name"])
+        except Exception as exc:
+            print(f"ADVERTENCIA: fallo al procesar el evento {event_id} ({exc}), se continua con el resto.")
+            continue
 
+        # Shots and incidents are fetched from two independent Sofascore
+        # endpoints with independent data coverage -- observed for real:
+        # some matches 404 on shotmap but still have working incidents
+        # (e.g. lower-tier Copa Chile ties). A failure fetching one must
+        # not discard whatever the other one has.
+        try:
             shots = get_shotmap(client, event_id)
             for shot in shots:
                 try:
@@ -71,7 +80,10 @@ def poll_once(client, conn, live_events: list[dict]) -> None:
                     print(
                         f"ADVERTENCIA: fallo al procesar el tiro {shot_id} del evento {event_id} ({exc}), se omite."
                     )
+        except Exception as exc:
+            print(f"ADVERTENCIA: fallo al obtener el shotmap del evento {event_id} ({exc}), se omite.")
 
+        try:
             incidents = get_incidents(client, event_id)
             for incident in incidents:
                 try:
@@ -89,7 +101,7 @@ def poll_once(client, conn, live_events: list[dict]) -> None:
                         f"ADVERTENCIA: fallo al procesar un incidente del evento {event_id} ({exc}), se omite."
                     )
         except Exception as exc:
-            print(f"ADVERTENCIA: fallo al procesar el evento {event_id} ({exc}), se continua con el resto.")
+            print(f"ADVERTENCIA: fallo al obtener los incidentes del evento {event_id} ({exc}), se omite.")
 
 
 def sync_to_vps(db_path: str | Path = DEFAULT_LIVE_MATCH_STATE_DB_PATH) -> None:
