@@ -52,3 +52,17 @@ Once `client.py` was about to be built against the real endpoints, a from-the-VP
 **FotMob was evaluated as an alternative and rejected.** Its unofficial API requires a signed `x-mas` request header that community wrapper libraries obtain by querying a **third-party, unidentified server at a bare IP address** (`http://46.101.91.154:6006/`) — an unverified, unmaintained-by-anyone-known dependency for producing an authentication token. This is a worse trust posture than Sofascore's IP-based block, not a better one, so FotMob is not used.
 
 **Resolution:** run this scraper from the developer's home Windows PC (confirmed working — residential IPs aren't subject to this block), syncing its output to the VPS via `scp` after each poll cycle, rather than as a Dokploy service. This is a real operational tradeoff (the home PC must stay powered on and connected for the scraper to keep running) accepted explicitly by the user in preference to a paid residential-proxy service, which would have been the first time this project paid for infrastructure.
+
+## Estado de despliegue
+
+Deployed as a Windows Scheduled Task (`GolesSofascorePoller`, `schtasks`/`Register-ScheduledTask`, trigger `AtLogOn`, `RestartCount 999` / `RestartInterval 1 minute`) on the developer's home PC. Registration required an elevated (Administrator) PowerShell session — the normal user session got `Access Denied` from `Register-ScheduledTask`.
+
+**Confirmed working:** the task starts the poller, which connects to Sofascore successfully from the home connection (TLS-impersonation library loads, no `403` — the datacenter-IP block described above does not apply here) and runs its normal cycle, printing `"0 partidos en vivo encontrados en las ligas trackeadas."` without error.
+
+**Not yet verified (blocked on the football calendar, not a defect):** it's mid-July 2026 — both ENG-Premier League and GER-Bundesliga are in their off-season, so there are genuinely zero live official matches for the poller to find right now. This means the following are still unverified and must be checked once the season resumes (August):
+- Real shots/cards actually accumulating in `data/live_match_state.db`.
+- The `scp` sync landing the file on the VPS (`/root/goles-live-match-state/live_match_state.db`).
+- The `RED_CARD_INCIDENT_CLASSES = {"red", "yellowRed"}` assumption in `src/goles/sofascore/poller.py`, against a real observed red card.
+- The Task Scheduler restart-on-failure behavior under a real crash.
+
+None of this blocks the plan from being considered code-complete — the poller is built, tested, deployed, and confirmed reachable; what remains is real-world data verification that can only happen once matches are actually being played.
