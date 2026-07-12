@@ -59,10 +59,17 @@ Deployed as a Windows Scheduled Task (`GolesSofascorePoller`, `schtasks`/`Regist
 
 **Confirmed working:** the task starts the poller, which connects to Sofascore successfully from the home connection (TLS-impersonation library loads, no `403` — the datacenter-IP block described above does not apply here) and runs its normal cycle, printing `"0 partidos en vivo encontrados en las ligas trackeadas."` without error.
 
-**Not yet verified (blocked on the football calendar, not a defect):** it's mid-July 2026 — both ENG-Premier League and GER-Bundesliga are in their off-season, so there are genuinely zero live official matches for the poller to find right now. This means the following are still unverified and must be checked once the season resumes (August):
-- Real shots/cards actually accumulating in `data/live_match_state.db`.
-- The `scp` sync landing the file on the VPS (`/root/goles-live-match-state/live_match_state.db`).
-- The `RED_CARD_INCIDENT_CLASSES = {"red", "yellowRed"}` assumption in `src/goles/sofascore/poller.py`, against a real observed red card.
+**Not yet verified (blocked on the football calendar, not a defect):** it's mid-July 2026 — both ENG-Premier League and GER-Bundesliga are in their off-season, so there are genuinely zero live official matches for the poller to find right now. What remains unverified specifically *for these two tracked leagues* until the season resumes (August):
+- Real shots/cards accumulating for an actual Premier League/Bundesliga match.
+- The `RED_CARD_INCIDENT_CLASSES = {"red", "yellowRed"}` assumption in `src/goles/sofascore/poller.py`, against a real observed red card (none has occurred in any match sampled so far, in any league).
 - The Task Scheduler restart-on-failure behavior under a real crash.
 
-None of this blocks the plan from being considered code-complete — the poller is built, tested, deployed, and confirmed reachable; what remains is real-world data verification that can only happen once matches are actually being played.
+**Verified for real against live, out-of-scope matches (mechanics only, not the tracked leagues):** since the poller's tournament filter is just one `if` in `discover_tracked_live_events`, the rest of the pipeline was exercised end-to-end against real, currently-live matches (bypassing the filter deliberately), which surfaced and led to fixing two real gaps:
+- **`scp` sync confirmed landing on the VPS** — `live_match_state.db` verified present at `/root/goles-live-match-state/live_match_state.db` with a fresh timestamp after a real sync.
+- **Per-event isolation confirmed working in production**, not just in tests: a real Ecuadorian LigaPro match raised a live exception (see next point) and the poller correctly logged a warning and kept going rather than crashing.
+- **Found and fixed: some lower-tier leagues omit `xg` on individual shots** (observed on Ecuadorian LigaPro — all 7 shots had `xg: null`). Originally this aborted the *entire event's* processing (one bad shot cost every other shot and all incidents for that match). Fixed in a follow-up commit to isolate each shot/incident individually, so one malformed item only costs itself.
+- **Found and fixed: `shotmap` and `incidents` are independent Sofascore endpoints with independent coverage** — observed on live Copa Chile matches, where `shotmap` returned `404` but `incidents` returned 9 real events (goals, substitutions) without error. Originally a shotmap failure discarded that event's card data too, since both were fetched inside one shared try block. Fixed in a follow-up commit to fetch/process shots and incidents in their own independent try blocks, so a shotmap outage doesn't cost red-card data that's actually available.
+
+Both fixes are covered by regression tests using the real failure shapes observed (missing `xg`, a fetch raising rather than returning) and are included in this plan's commits. Given top-tier competitions (confirmed during design with a FIFA World Cup match) do return complete `xg` and working shotmaps, neither issue is expected to actually affect Premier League/Bundesliga in practice — but the hardening is real and now in place regardless.
+
+None of this blocks the plan from being considered code-complete — the poller is built, tested, deployed, confirmed reachable, and has now been exercised against real live data (just not yet from the two specific tracked leagues, which remain in their off-season).
