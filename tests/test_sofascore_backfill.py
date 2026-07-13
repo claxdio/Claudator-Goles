@@ -21,8 +21,8 @@ SOFA_SHOTS = [
      "playerCoordinates": {"x": 11.0, "y": 44.0}, "bodyPart": "head"},
 ]
 SOFA_INCIDENTS = [
-    {"time": 55, "incidentType": "card", "incidentClass": "red", "isHome": False},
-    {"time": 60, "incidentType": "card", "incidentClass": "yellow", "isHome": True},
+    {"time": 55, "incidentType": "card", "incidentClass": "red", "isHome": False, "player": {"name": "Test Player"}},
+    {"time": 60, "incidentType": "card", "incidentClass": "yellow", "isHome": True, "player": {"name": "Test Player 2"}},
 ]
 
 
@@ -118,3 +118,21 @@ def test_backfill_event_credits_own_goal_to_the_right_team_with_zero_xg():
     assert home_goals == 1 and away_goals == 0
     xg = conn.execute("SELECT xg FROM shots").fetchone()[0]
     assert xg == 0.0  # never fed through the booster
+
+
+def test_backfill_event_excludes_manager_red_cards():
+    # Real observed Sofascore shape: a manager/staff dismissal has a
+    # "manager" key instead of "player" and a negative "time" (post-match
+    # ejection) -- doesn't put the team down a man on the pitch, must not
+    # be counted the same as a player red card.
+    incidents_with_manager_card = SOFA_INCIDENTS + [
+        {"time": -5, "incidentType": "card", "incidentClass": "red", "isHome": True,
+         "manager": {"name": "Test Coach"}},
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    with patch("goles.sofascore.backfill.get_shotmap", return_value=SOFA_SHOTS):
+        with patch("goles.sofascore.backfill.get_incidents", return_value=incidents_with_manager_card):
+            backfill_event(Mock(), conn, _FakeBooster(), _finished_event(), "CHI-Liga de Primera", "2025")
+    cards = conn.execute("SELECT minute FROM cards").fetchall()
+    assert cards == [(55,)]  # only the real player red card; manager dismissal excluded

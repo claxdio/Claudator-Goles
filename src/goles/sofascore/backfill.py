@@ -97,6 +97,14 @@ def backfill_event(client, conn: sqlite3.Connection, booster, event: dict, leagu
             observed_card_classes[incident_class] += 1
             if incident_class not in RED_CARD_INCIDENT_CLASSES:
                 continue
+            if "player" not in incident:
+                # Manager/staff dismissals carry a "manager" key instead of
+                # "player" (and a negative "time", a post-match ejection
+                # marker) -- verified empirically (Ariel Holan, Manuel
+                # Fernandez ejections). These don't put the team down a man
+                # on the pitch, so they must not be counted as a player
+                # red card.
+                continue
             team_id = home_id if incident.get("isHome") else away_id
             conn.execute(
                 "INSERT INTO cards (match_id, team_id, minute) VALUES (?, ?, ?)",
