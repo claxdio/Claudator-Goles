@@ -94,3 +94,27 @@ def test_backfill_event_reports_missing_shotmap_without_raising():
             result = backfill_event(Mock(), conn, _FakeBooster(), _finished_event(), "CHI-Liga de Primera", "2025")
     assert result == "no_shotmap"
     assert conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 0
+
+
+OWN_GOAL_SHOTS = [
+    {"id": 1, "time": 4, "shotType": "goal", "situation": "own-goal", "goalType": "own",
+     "isHome": False, "playerCoordinates": {"x": 4.0, "y": 50.0}, "bodyPart": "other"},
+]
+
+
+def test_backfill_event_credits_own_goal_to_the_right_team_with_zero_xg():
+    conn = get_connection(":memory:")
+    init_db(conn)
+    with patch("goles.sofascore.backfill.get_shotmap", return_value=OWN_GOAL_SHOTS):
+        with patch("goles.sofascore.backfill.get_incidents", return_value=[]):
+            result = backfill_event(
+                Mock(), conn, _FakeBooster(), _finished_event(), "CHI-Liga de Primera", "2025"
+            )
+    assert result == "ok"
+    home_goals, away_goals = conn.execute(
+        "SELECT home_goals, away_goals FROM matches"
+    ).fetchone()
+    # shooter (own-goal scorer) was away (isHome=False) -> goal counts for home
+    assert home_goals == 1 and away_goals == 0
+    xg = conn.execute("SELECT xg FROM shots").fetchone()[0]
+    assert xg == 0.0  # never fed through the booster

@@ -12,6 +12,11 @@ SITUATION_MAP = {
     "throw-in-set-piece": "SetPiece",
     "free-kick": "DirectFreekick",
     "penalty": "Penalty",
+    # Sofascore doesn't preserve the shot's real situation for own goals
+    # (just "own-goal"), so this is a deliberate neutral default -- it
+    # never affects xG anyway, since own goals get a fixed xg=0.0 (see
+    # is_own_goal below), matching the existing Understat convention.
+    "own-goal": "OpenPlay",
 }
 
 BODY_PART_MAP = {
@@ -47,6 +52,15 @@ def translate_shot(sofa_shot: dict) -> dict:
     if x is None or y is None:
         raise UnknownVocabularyError("tiro sin coordenadas -- no se puede calcular xG")
 
+    # Sofascore attributes an own goal's shot to the scoring-against
+    # player's own team (isHome reflects the shooter's side), but the
+    # goal counts for the opposing side -- flip it here, matching the
+    # existing Understat own-goal convention in loaders/understat.py.
+    is_own_goal = sofa_shot.get("goalType") == "own"
+    is_home = bool(sofa_shot.get("isHome"))
+    if is_own_goal:
+        is_home = not is_home
+
     return {
         "minute": sofa_shot["time"],
         "location_x": 1.0 - (x / 100.0),
@@ -54,5 +68,6 @@ def translate_shot(sofa_shot: dict) -> dict:
         "situation": SITUATION_MAP[situation_raw],
         "shot_type": BODY_PART_MAP[body_raw] if body_raw is not None else None,
         "is_goal": sofa_shot.get("shotType") == "goal",
-        "is_home": bool(sofa_shot.get("isHome")),
+        "is_home": is_home,
+        "is_own_goal": is_own_goal,
     }

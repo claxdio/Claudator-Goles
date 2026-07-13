@@ -51,3 +51,17 @@ def test_translate_fails_loud_on_unknown_situation():
 def test_translate_tolerates_missing_body_part():
     out = translate_shot(_sofa_shot(bodyPart=None))
     assert out["shot_type"] is None  # xG model one-hots it as all-zero
+
+
+def test_translate_own_goal_flips_team_and_flags_zero_xg():
+    # Sofascore attributes the shot to the scoring-against player (isHome
+    # here is the away team), but the goal counts for the home side.
+    out = translate_shot(_sofa_shot(situation="own-goal", goalType="own", isHome=False))
+    assert out["is_goal"] is True
+    assert out["is_home"] is True  # flipped from the raw isHome=False
+    assert out["is_own_goal"] is True
+
+
+def test_translate_regular_goal_is_not_flagged_as_own_goal():
+    out = translate_shot(_sofa_shot())
+    assert out["is_own_goal"] is False

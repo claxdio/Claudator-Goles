@@ -63,12 +63,16 @@ def backfill_event(client, conn: sqlite3.Connection, booster, event: dict, leagu
         except UnknownVocabularyError as exc:
             print(f"  ADVERTENCIA: {exc} (evento {event_id}), tiro omitido.")
             continue
+        # Own goals aren't a shot-quality event for the scoring side -- fixed
+        # xg=0.0, matching the existing Understat own-goal convention,
+        # never run through the booster.
+        xg = 0.0 if t["is_own_goal"] else predict_xg(booster, t)
         records.append(
             {
                 "match_id": event_id, "league": league, "season": season_label,
                 "date": date_iso, "home_team": home, "away_team": away,
                 "minute": t["minute"], "team": "home" if t["is_home"] else "away",
-                "xg": predict_xg(booster, t), "is_goal": t["is_goal"],
+                "xg": xg, "is_goal": t["is_goal"],
                 "location_x": t["location_x"], "location_y": t["location_y"],
                 "situation": t["situation"], "shot_type": t["shot_type"],
             }
