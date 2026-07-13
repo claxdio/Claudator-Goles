@@ -39,8 +39,8 @@ def test_poll_once_persists_shots_and_red_cards():
     ]
     incidents = [
         {"time": 45, "incidentType": "period"},
-        {"time": 55, "incidentType": "card", "incidentClass": "red", "isHome": False},
-        {"time": 60, "incidentType": "card", "incidentClass": "yellow", "isHome": True},
+        {"time": 55, "incidentType": "card", "incidentClass": "red", "isHome": False, "player": {"name": "Test Player"}},
+        {"time": 60, "incidentType": "card", "incidentClass": "yellow", "isHome": True, "player": {"name": "Test Player 2"}},
     ]
     conn = get_connection(":memory:")
     init_db(conn)
@@ -73,7 +73,7 @@ def test_poll_once_handles_shots_and_incidents_missing_optional_fields():
         {"id": 111, "time": 30, "xg": 0.1, "shotType": "miss", "isHome": True},
     ]
     incidents = [
-        {"time": 40, "incidentType": "card", "incidentClass": "red"},
+        {"time": 40, "incidentType": "card", "incidentClass": "red", "player": {"name": "Test Player"}},
     ]
     conn = get_connection(":memory:")
     init_db(conn)
@@ -148,8 +148,8 @@ def test_poll_once_isolates_failures_between_individual_shots_and_incidents():
         {"id": 2, "time": 20, "xg": 0.2, "shotType": "goal", "isHome": False},  # well-formed
     ]
     incidents = [
-        {"incidentType": "card", "incidentClass": "red"},  # missing "time" -- raises when persisting
-        {"time": 30, "incidentType": "card", "incidentClass": "red", "isHome": True},  # well-formed
+        {"incidentType": "card", "incidentClass": "red", "player": {"name": "Test Player"}},  # missing "time" -- raises when persisting
+        {"time": 30, "incidentType": "card", "incidentClass": "red", "isHome": True, "player": {"name": "Test Player 2"}},  # well-formed
     ]
     conn = get_connection(":memory:")
     init_db(conn)
@@ -177,7 +177,7 @@ def test_poll_once_still_persists_cards_when_shotmap_fetch_fails():
         "tournament": {"name": "Premier League"},
     }
     incidents = [
-        {"time": 60, "incidentType": "card", "incidentClass": "red", "isHome": True},
+        {"time": 60, "incidentType": "card", "incidentClass": "red", "isHome": True, "player": {"name": "Test Player"}},
     ]
     conn = get_connection(":memory:")
     init_db(conn)
@@ -192,6 +192,33 @@ def test_poll_once_still_persists_cards_when_shotmap_fetch_fails():
 
     card_rows = conn.execute("SELECT team, minute, card_type FROM cards").fetchall()
     assert card_rows == [("home", 60, "red")]  # but the card still made it in
+
+
+def test_poll_once_excludes_manager_red_cards():
+    # Real observed Sofascore shape: a manager/staff dismissal has a
+    # "manager" key instead of "player" and a negative "time" (post-match
+    # ejection) -- doesn't put the team down a man on the pitch, must not
+    # be counted the same as a player red card.
+    event = {
+        "id": 777,
+        "homeTeam": {"name": "Arsenal"},
+        "awayTeam": {"name": "Chelsea"},
+        "tournament": {"name": "Premier League"},
+    }
+    incidents = [
+        {"time": 55, "incidentType": "card", "incidentClass": "red", "isHome": False, "player": {"name": "Test Player"}},
+        {"time": -5, "incidentType": "card", "incidentClass": "red", "isHome": True, "manager": {"name": "Test Coach"}},
+    ]
+    conn = get_connection(":memory:")
+    init_db(conn)
+    client = Mock()
+
+    with patch("goles.sofascore.poller.get_shotmap", return_value=[]):
+        with patch("goles.sofascore.poller.get_incidents", return_value=incidents):
+            poll_once(client, conn, [event])
+
+    card_rows = conn.execute("SELECT team, minute FROM cards").fetchall()
+    assert card_rows == [("away", 55)]  # only the real player red card; manager dismissal excluded
 
 
 def test_sync_to_vps_invokes_scp_with_expected_arguments():

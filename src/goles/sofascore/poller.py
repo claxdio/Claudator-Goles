@@ -12,10 +12,9 @@ from goles.sofascore.store import DEFAULT_LIVE_MATCH_STATE_DB_PATH, get_connecti
 from goles.sofascore.team_aliases import normalize_sofascore_team_name
 
 TRACKED_TOURNAMENTS = ["Premier League", "Bundesliga"]
-# Assumed from community documentation of Sofascore's incident vocabulary,
-# NOT yet confirmed against a real observed red card (none occurred in the
-# live match sampled during design). Verify against a real occurrence
-# during Task 5's manual verification step and correct if wrong.
+# Confirmed against real data: the Chilean historical backfill's incidentClass
+# census (2026-07) observed exactly these two plus "yellow" across ~9,900 card
+# incidents -- no other values.
 RED_CARD_INCIDENT_CLASSES = {"red", "yellowRed"}
 POLL_INTERVAL_SECONDS = 60
 
@@ -91,6 +90,15 @@ def poll_once(client, conn, live_events: list[dict]) -> None:
                         continue
                     incident_class = incident.get("incidentClass")
                     if incident_class not in RED_CARD_INCIDENT_CLASSES:
+                        continue
+                    if "player" not in incident:
+                        # Manager/staff dismissals carry a "manager" key
+                        # instead of "player" (and a negative "time", a
+                        # post-match ejection marker) -- verified
+                        # empirically during the Chilean backfill (Ariel
+                        # Holan, Manuel Fernandez ejections). These don't
+                        # put the team down a man on the pitch, so they
+                        # must not be counted as a player red card.
                         continue
                     team = "home" if incident.get("isHome") else "away"
                     persist_card(
